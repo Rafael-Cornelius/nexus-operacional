@@ -5,7 +5,7 @@ import { RefreshCw, RotateCcw, Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, StatusBadge } from "@/components/ui/card";
 import { DataTable } from "@/components/tables/data-table";
-import { formatKg, formatPercent } from "@/lib/format";
+import { formatCurrency, formatKg, formatPercent } from "@/lib/format";
 import { apiGetClient, apiPostClient, getSession } from "@/services/api";
 
 interface FormState {
@@ -14,6 +14,10 @@ interface FormState {
   realizedBatches: number;
   packedBoxes: number;
   averagePackageWeightG: number;
+  usedReworkKg: number;
+  weighingLossKg: number;
+  generatedReworkKg: number;
+  notes: string;
 }
 
 interface ProductRow {
@@ -21,6 +25,7 @@ interface ProductRow {
   code: string;
   name: string;
   active: boolean;
+  pricePerKg?: string | number;
   defaultSector?: { code: "P1" | "P2" };
   weightConfig?: {
     formula: "BOX_WEIGHT" | "PACKAGE_WEIGHT";
@@ -51,6 +56,9 @@ interface EntryRow {
   expectedYieldKg: string | number;
   realYieldPercent: string | number;
   overweightTotalKg: string | number;
+  productionCost?: string | number;
+  lossesCost?: string | number;
+  overweightCost?: string | number;
   status: string;
   product?: { code: string; name: string };
 }
@@ -61,6 +69,9 @@ interface PreviewState {
   realYieldPercent: number;
   overweightTotalKg: number;
   overweightPercent: number;
+  productionCost: number;
+  lossesCost: number;
+  overweightCost: number;
   status: string;
 }
 
@@ -99,7 +110,11 @@ export function ProductionForm({ sector }: { sector: "P1" | "P2" }) {
     plannedBatches: 0,
     realizedBatches: 0,
     packedBoxes: 0,
-    averagePackageWeightG: 0
+    averagePackageWeightG: 0,
+    usedReworkKg: 0,
+    weighingLossKg: 0,
+    generatedReworkKg: 0,
+    notes: ""
   });
   const [date, setDate] = useState(today());
   const [products, setProducts] = useState<ProductRow[]>([]);
@@ -110,7 +125,7 @@ export function ProductionForm({ sector }: { sector: "P1" | "P2" }) {
   const [serverPreview, setServerPreview] = useState<PreviewState | null>(null);
   const [message, setMessage] = useState("Carregando produtos, semanas e lancamentos da API.");
   const [loading, setLoading] = useState(false);
-  const token = useMemo(() => getSession()?.accessToken, []);
+  const session = useMemo(() => getSession(), []);
 
   const selectedProduct = products.find((product) => product.id === productId);
   const weightConfig = productWeightConfig(selectedProduct, sector);
@@ -120,7 +135,7 @@ export function ProductionForm({ sector }: { sector: "P1" | "P2" }) {
       weightConfig.formula === "PACKAGE_WEIGHT"
         ? state.packedBoxes * weightConfig.packagesPerBox * weightConfig.packageWeightKg
         : state.packedBoxes * weightConfig.boxWeightKg;
-    const expectedKg = state.realizedBatches * weightConfig.massWeightKg;
+    const expectedKg = state.realizedBatches * weightConfig.massWeightKg + (sector === "P1" ? state.usedReworkKg : 0);
     const yieldPercent = expectedKg === 0 ? 0 : producedKg / expectedKg;
     const overweightG = Math.max(state.averagePackageWeightG - weightConfig.targetPackageWeightG, 0);
     const overweightKg = (overweightG * state.packedBoxes * weightConfig.packagesPerBox) / 1000;
@@ -130,19 +145,22 @@ export function ProductionForm({ sector }: { sector: "P1" | "P2" }) {
       realYieldPercent: yieldPercent,
       overweightTotalKg: overweightKg,
       overweightPercent: producedKg === 0 ? 0 : overweightKg / producedKg,
+      productionCost: producedKg * Number(selectedProduct?.pricePerKg ?? 0),
+      lossesCost: state.weighingLossKg * Number(selectedProduct?.pricePerKg ?? 0),
+      overweightCost: overweightKg * Number(selectedProduct?.pricePerKg ?? 0),
       status: overweightKg / Math.max(producedKg, 1) > weightConfig.overweightTolerancePercent ? "ATTENTION" : "OK"
     };
-  }, [state, weightConfig]);
+  }, [state, weightConfig, sector, selectedProduct?.pricePerKg]);
 
   const preview = serverPreview ?? localPreview;
 
   async function loadReferences() {
-    if (!token) return;
+    if (!session) return;
     setLoading(true);
     try {
       const [productRows, weekRows] = await Promise.all([
-        apiGetClient<ProductRow[]>("/products?active=true", token),
-        apiGetClient<WeekRow[]>("/weeks", token)
+        apiGetClient<ProductRow[]>("/products?active=true"),
+        apiGetClient<WeekRow[]>("/weeks")
       ]);
       const sectorProducts = productRows.filter((product) => product.defaultSector?.code === sector || !product.defaultSector);
       setProducts(sectorProducts);
@@ -163,13 +181,13 @@ export function ProductionForm({ sector }: { sector: "P1" | "P2" }) {
 
   async function loadEntries(nextWeekId = weekId) {
     if (!nextWeekId) return;
-    if (!token) {
+    if (!session) {
       setEntries([]);
       return;
     }
     try {
       const query = new URLSearchParams({ sector, weekId: nextWeekId });
-      const data = await apiGetClient<EntryRow[]>(`/production?${query.toString()}`, token);
+      const data = await apiGetClient<EntryRow[]>(`/production?${query.toString()}`);
       setEntries(data);
     } catch (error) {
       setEntries([]);
@@ -197,12 +215,13 @@ export function ProductionForm({ sector }: { sector: "P1" | "P2" }) {
         sector,
         plannedBatches: state.plannedBatches,
         realizedBatches: state.realizedBatches,
-        usedReworkKg: 0,
+        usedReworkKg: state.usedReworkKg,
         packedBoxes: state.packedBoxes,
-        weighingLossKg: 0,
-        generatedReworkKg: 0,
+        weighingLossKg: state.weighingLossKg,
+        generatedReworkKg: state.generatedReworkKg,
         averagePackageWeightG: state.averagePackageWeightG,
-        weightConfig
+        weightConfig,
+        pricePerKg: Number(selectedProduct?.pricePerKg ?? 0)
       });
       setServerPreview(response);
       setMessage("Calculo validado pela API de dominio.");
@@ -215,7 +234,7 @@ export function ProductionForm({ sector }: { sector: "P1" | "P2" }) {
   }
 
   async function saveEntry() {
-    if (!token) {
+    if (!session) {
       setMessage("Entre no sistema para salvar lancamentos reais.");
       return;
     }
@@ -236,14 +255,13 @@ export function ProductionForm({ sector }: { sector: "P1" | "P2" }) {
           productionOrder: state.productionOrder,
           plannedBatches: state.plannedBatches,
           realizedBatches: state.realizedBatches,
-          usedReworkKg: 0,
+          usedReworkKg: state.usedReworkKg,
           packedBoxes: state.packedBoxes,
-          weighingLossKg: 0,
-          generatedReworkKg: 0,
+          weighingLossKg: state.weighingLossKg,
+          generatedReworkKg: state.generatedReworkKg,
           averagePackageWeightG: state.averagePackageWeightG,
-          notes: "Lancamento salvo via tela operacional."
-        },
-        token
+          notes: state.notes
+        }
       );
       setMessage("Lancamento salvo no banco e recalculado pelo backend.");
       await loadEntries(weekId);
@@ -274,6 +292,10 @@ export function ProductionForm({ sector }: { sector: "P1" | "P2" }) {
             <NumberField label="Realizado bat." value={state.realizedBatches} onChange={(value) => update("realizedBatches", value)} />
             <NumberField label="Caixas embaladas" value={state.packedBoxes} onChange={(value) => update("packedBoxes", value)} />
             <NumberField label="Peso medio pacote g" value={state.averagePackageWeightG} onChange={(value) => update("averagePackageWeightG", value)} />
+            {sector === "P1" ? <NumberField label="Reforma utilizada kg" value={state.usedReworkKg} onChange={(value) => update("usedReworkKg", value)} /> : null}
+            <NumberField label="Perda de pesagem kg" value={state.weighingLossKg} onChange={(value) => update("weighingLossKg", value)} />
+            <NumberField label="Reforma gerada kg" value={state.generatedReworkKg} onChange={(value) => update("generatedReworkKg", value)} />
+            <Field label="Observações" value={state.notes} onChange={(value) => update("notes", value)} />
           </div>
           <div className="mt-6 flex flex-wrap gap-3">
             <Button type="button" onClick={saveEntry} disabled={loading}>
@@ -299,6 +321,9 @@ export function ProductionForm({ sector }: { sector: "P1" | "P2" }) {
           <Metric label="Rendimento real" value={formatPercent(preview.realYieldPercent)} />
           <Metric label="Sobrepeso total" value={formatKg(preview.overweightTotalKg)} />
           <Metric label="Sobrepeso %" value={formatPercent(preview.overweightPercent)} />
+          <Metric label="Custo produção" value={formatCurrency(preview.productionCost)} />
+          <Metric label="Custo perdas" value={formatCurrency(preview.lossesCost)} />
+          <Metric label="Custo sobrepeso" value={formatCurrency(preview.overweightCost)} />
         </Card>
       </div>
 
@@ -314,9 +339,12 @@ export function ProductionForm({ sector }: { sector: "P1" | "P2" }) {
                 Produzido: formatKg(Number(entry.producedKg)),
                 Rendimento: formatPercent(Number(entry.realYieldPercent)),
                 Sobrepeso: formatKg(Number(entry.overweightTotalKg)),
+                "Custo produção": formatCurrency(Number(entry.productionCost ?? 0)),
+                "Custo perdas": formatCurrency(Number(entry.lossesCost ?? 0)),
+                "Custo sobrepeso": formatCurrency(Number(entry.overweightCost ?? 0)),
                 Status: entry.status
               }))
-            : [{ Data: "-", Produto: "Nenhum lancamento carregado para a semana selecionada.", OP: "-", Caixas: "-", Produzido: "-", Rendimento: "-", Sobrepeso: "-", Status: "-" }]
+            : [{ Data: "-", Produto: "Nenhum lancamento carregado para a semana selecionada.", OP: "-", Caixas: "-", Produzido: "-", Rendimento: "-", Sobrepeso: "-", "Custo produção": "-", "Custo perdas": "-", "Custo sobrepeso": "-", Status: "-" }]
         }
       />
     </div>

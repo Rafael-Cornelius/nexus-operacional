@@ -4,6 +4,8 @@ import { productionEntrySchema, productionPreviewSchema } from "../../domain/val
 import { calculateProductionEntry } from "../../domain/calculations/production-calculations";
 import { ProductWeightConfig } from "../../domain/calculations/types";
 import { classifyRule } from "../../domain/alerts/alert-engine";
+import { calculateProductionCosts } from "../../domain/calculations/financial-calculations";
+import { assertDateWithinWeek, assertWeekWritable } from "../../domain/weeks/week-rules";
 import { AuditService } from "../audit/audit.service";
 import { CurrentUser } from "../../infrastructure/security/current-user";
 
@@ -37,8 +39,15 @@ export class ProductionService {
       target: input.weightConfig.overweightTolerancePercent
     });
 
+    const costs = calculateProductionCosts({
+      producedKg: calculations.producedKg,
+      weighingLossKg: input.weighingLossKg,
+      overweightKg: calculations.overweightTotalKg,
+      pricePerKg: input.pricePerKg
+    });
     return {
       ...calculations,
+      ...costs,
       status: worstStatus(yieldStatus, overweightStatus)
     };
   }
@@ -61,10 +70,8 @@ export class ProductionService {
     const input = productionEntrySchema.parse(payload);
     const week = await this.prisma.weeklyPeriod.findUnique({ where: { id: input.weekId } });
     if (!week) throw new NotFoundException("Semana nao encontrada.");
-    if (week.status !== "OPEN" && week.status !== "REVIEW") {
-      throw new BadRequestException("Semana fechada ou arquivada nao aceita novos lancamentos.");
-    }
-    this.assertDateInsideWeek(input.date, week.startsOn, week.endsOn);
+    assertWeekWritable(week, "Semana fechada ou arquivada nao aceita novos lancamentos.");
+    assertDateWithinWeek(input.date, week, "Data do lancamento precisa pertencer ao periodo da semana selecionada.");
 
     const product = await this.prisma.product.findUnique({
       where: { id: input.productId },
@@ -84,6 +91,14 @@ export class ProductionService {
       targetPackageWeightG: Number(product.weightConfig.targetPackageWeightG),
       overweightTolerancePercent: Number(product.weightConfig.overweightTolerancePercent)
     };
+    const pricePeriod = await this.prisma.productPricePeriod.findFirst({
+      where: {
+        productId: product.id,
+        startsOn: { lte: dateOnly(input.date) },
+        OR: [{ endsOn: null }, { endsOn: { gte: dateOnly(input.date) } }]
+      },
+      orderBy: { startsOn: "desc" }
+    });
     const calculated = calculateProductionEntry({
       sector: input.sector,
       plannedBatches: input.plannedBatches,
@@ -101,6 +116,12 @@ export class ProductionService {
       metric: "overweight",
       value: calculated.overweightPercent,
       target: weightConfig.overweightTolerancePercent
+    });
+    const costs = calculateProductionCosts({
+      producedKg: calculated.producedKg,
+      weighingLossKg: input.weighingLossKg,
+      overweightKg: calculated.overweightTotalKg,
+      pricePerKg: Number(pricePeriod?.pricePerKg ?? product.pricePerKg)
     });
 
     const order = await this.prisma.productionOrder.upsert({
@@ -144,6 +165,10 @@ export class ProductionService {
         overweightGPerPackage: calculated.overweightGPerPackage,
         overweightTotalKg: calculated.overweightTotalKg,
         overweightPercent: calculated.overweightPercent,
+        unitPricePerKg: costs.unitPricePerKg,
+        productionCost: costs.productionCost,
+        lossesCost: costs.lossesCost,
+        overweightCost: costs.overweightCost,
         status: worstStatus(yieldStatus, overweightStatus),
         notes: [input.notes, ...calculated.inconsistencies].filter(Boolean).join("\n"),
         createdBy: this.safeUserId(user),
@@ -159,9 +184,7 @@ export class ProductionService {
   async duplicate(id: string, user?: CurrentUser) {
     const current = await this.prisma.productionEntry.findUnique({ where: { id }, include: { week: true, sector: true } });
     if (!current || current.deletedAt) throw new NotFoundException("Lancamento nao encontrado.");
-    if (current.week.status !== "OPEN" && current.week.status !== "REVIEW") {
-      throw new BadRequestException("Semana fechada ou arquivada nao permite duplicacao.");
-    }
+    assertWeekWritable(current.week, "Semana fechada ou arquivada nao permite duplicacao.");
     const newOrderNumber = `${current.productionOrder}-COPIA`;
     const order = await this.prisma.productionOrder.upsert({
       where: {
@@ -204,6 +227,10 @@ export class ProductionService {
         overweightGPerPackage: current.overweightGPerPackage,
         overweightTotalKg: current.overweightTotalKg,
         overweightPercent: current.overweightPercent,
+        unitPricePerKg: current.unitPricePerKg,
+        productionCost: current.productionCost,
+        lossesCost: current.lossesCost,
+        overweightCost: current.overweightCost,
         status: current.status,
         notes: current.notes,
         createdBy: this.safeUserId(user),
@@ -218,22 +245,13 @@ export class ProductionService {
   async softDelete(id: string, user?: CurrentUser) {
     const current = await this.prisma.productionEntry.findUnique({ where: { id }, include: { week: true } });
     if (!current || current.deletedAt) throw new NotFoundException("Lancamento nao encontrado.");
-    if (current.week.status !== "OPEN" && current.week.status !== "REVIEW") {
-      throw new BadRequestException("Semana fechada ou arquivada nao permite exclusao.");
-    }
+    assertWeekWritable(current.week, "Semana fechada ou arquivada nao permite exclusao.");
     const entry = await this.prisma.productionEntry.update({
       where: { id },
       data: { deletedAt: new Date(), updatedBy: this.safeUserId(user) }
     });
     await this.audit.record({ userId: this.safeUserId(user), module: "production", action: "delete", entity: "ProductionEntry", entityId: id, before: current, after: entry });
     return entry;
-  }
-
-  private assertDateInsideWeek(date: Date, startsOn: Date, endsOn: Date) {
-    const target = dateOnly(date);
-    if (target < dateOnly(startsOn) || target > dateOnly(endsOn)) {
-      throw new BadRequestException("Data do lancamento precisa pertencer ao periodo da semana selecionada.");
-    }
   }
 
   private safeUserId(user?: CurrentUser) {

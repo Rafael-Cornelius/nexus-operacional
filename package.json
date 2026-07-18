@@ -9,6 +9,7 @@
   ],
   "scripts": {
     "dev": "turbo dev",
+    "preview:live": "npm run dev --workspace=@nexus/web",
     "build": "turbo build",
     "lint": "turbo lint",
     "typecheck": "turbo typecheck",

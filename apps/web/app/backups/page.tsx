@@ -45,7 +45,7 @@ function shortChecksum(value?: string | null) {
 }
 
 export default function BackupsPage() {
-  const token = useMemo(() => getSession()?.accessToken, []);
+  const session = useMemo(() => getSession(), []);
   const [backups, setBackups] = useState<BackupRow[]>([]);
   const [summary, setSummary] = useState<BackupListResponse["summary"]>({
     total: 0,
@@ -59,10 +59,10 @@ export default function BackupsPage() {
   const [loading, setLoading] = useState(false);
 
   async function loadBackups() {
-    if (!token) return;
+    if (!session) return;
     setLoading(true);
     try {
-      const data = await apiGetClient<BackupListResponse>("/backups?take=50", token);
+      const data = await apiGetClient<BackupListResponse>("/backups?take=50");
       setBackups(data.items);
       setSummary(data.summary);
       setMessage(`${data.summary.total} backup(s) registrado(s) no banco.`);
@@ -80,7 +80,7 @@ export default function BackupsPage() {
   }, []);
 
   async function createBackup() {
-    if (!token) {
+    if (!session) {
       setMessage("Entre no sistema para gerar um backup real.");
       return;
     }
@@ -88,7 +88,7 @@ export default function BackupsPage() {
     setLoading(true);
     setMessage("Gerando snapshot JSON do banco...");
     try {
-      const backup = await apiPostClient<BackupRow>("/backups", {}, token);
+      const backup = await apiPostClient<BackupRow>("/backups", {});
       setMessage(`Backup gerado: ${backup.fileName}`);
       await loadBackups();
     } catch (error) {

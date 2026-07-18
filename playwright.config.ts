@@ -13,8 +13,8 @@ export default defineConfig({
     { name: "mobile", use: { ...devices["Pixel 7"] } }
   ],
   webServer: {
-    command: "npm.cmd run dev --workspace=@nexus/web",
-    url: "http://localhost:3000/nexus-operacional/",
+    command: "npm run dev --workspace=@nexus/web",
+    url: "http://localhost:3000/login",
     reuseExistingServer: true,
     timeout: 120_000
   }

@@ -33,18 +33,18 @@ export default function OverweightPage() {
   const [ranking, setRanking] = useState<OverweightRow[]>([]);
   const [message, setMessage] = useState("Carregando ranking de sobrepeso da API.");
   const [loading, setLoading] = useState(false);
-  const token = useMemo(() => getSession()?.accessToken, []);
+  const session = useMemo(() => getSession(), []);
 
   async function loadRanking(nextWeekId = weekId) {
-    if (!token) return;
+    if (!session) return;
     setLoading(true);
     try {
-      const weekRows = await apiGetClient<WeekRow[]>("/weeks", token);
+      const weekRows = await apiGetClient<WeekRow[]>("/weeks");
       const selectedWeek = nextWeekId || weekRows.find((week) => week.status !== "CLOSED" && week.status !== "ARCHIVED")?.id || weekRows[0]?.id || "";
       setWeeks(weekRows);
       setWeekId(selectedWeek);
       const query = selectedWeek ? `?weekId=${selectedWeek}` : "";
-      const data = await apiGetClient<OverweightRow[]>(`/overweight/ranking${query}`, token);
+      const data = await apiGetClient<OverweightRow[]>(`/overweight/ranking${query}`);
       setRanking(data);
       setMessage(data.length ? "Ranking de sobrepeso carregado da API." : "Sem producao na semana selecionada.");
     } catch (error) {

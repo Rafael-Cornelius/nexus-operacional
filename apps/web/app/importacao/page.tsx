@@ -22,6 +22,9 @@ interface ImportPreview {
   productCount?: number;
   duplicateWeightCodes?: string[];
   importErrorCount?: number;
+  productionEntryCount?: number;
+  lossEntryCount?: number;
+  downtimeEntryCount?: number;
   importErrors?: Array<{ sheetName?: string | null; cell?: string | null; message: string; status?: string }>;
 }
 
@@ -58,12 +61,12 @@ export default function ImportPage() {
   const [activeBatchId, setActiveBatchId] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string>("Aguardando conexao autenticada com a API.");
-  const token = useMemo(() => getSession()?.accessToken, []);
+  const session = useMemo(() => getSession(), []);
 
   async function loadPreview(batchId?: string) {
-    if (!token) return;
+    if (!session) return;
     const query = batchId ? `?batchId=${encodeURIComponent(batchId)}` : "";
-    const data = await apiGetClient<ImportPreview>(`/import/preview${query}`, token);
+    const data = await apiGetClient<ImportPreview>(`/import/preview${query}`);
     setPreview(data);
     setActiveBatchId(data.batchId ?? batchId ?? "");
     setMessage(data.batchId ? "Preview carregado do lote enviado." : "Nenhuma planilha carregada para importacao.");
@@ -71,10 +74,10 @@ export default function ImportPage() {
 
   useEffect(() => {
     loadPreview().catch((error) => setMessage(error instanceof Error ? error.message : "Nao foi possivel carregar preview da API."));
-  }, [token]);
+  }, [session]);
 
   async function uploadWorkbook() {
-    if (!token) {
+    if (!session) {
       setMessage("Entre no sistema para enviar a planilha.");
       return;
     }
@@ -88,7 +91,7 @@ export default function ImportPage() {
     try {
       const formData = new FormData();
       formData.append("file", selectedFile);
-      const result = await apiUploadClient<ImportBatch>("/import/upload", formData, token);
+      const result = await apiUploadClient<ImportBatch>("/import/upload", formData);
       setBatch(result);
       setActiveBatchId(result.id);
       await loadPreview(result.id);
@@ -101,7 +104,7 @@ export default function ImportPage() {
   }
 
   async function runImport() {
-    if (!token) {
+    if (!session) {
       setMessage("Entre no sistema para executar a importacao real.");
       return;
     }
@@ -113,12 +116,31 @@ export default function ImportPage() {
     setLoading(true);
     setMessage("Importando produtos e configuracoes tecnicas...");
     try {
-      const result = await apiPostClient<ImportBatch>("/import/products", { batchId: activeBatchId }, token);
+      const result = await apiPostClient<ImportBatch>("/import/products", { batchId: activeBatchId });
       setBatch(result);
       await loadPreview(result.id);
       setMessage("Importacao concluida e registrada no banco.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Falha ao importar produtos.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function runOperationalImport() {
+    if (!session || !activeBatchId) {
+      setMessage("Envie uma planilha .xlsx antes de importar os registros operacionais.");
+      return;
+    }
+    setLoading(true);
+    setMessage("Importando produção, perdas e paradas da planilha...");
+    try {
+      const result = await apiPostClient<ImportBatch>("/import/operational-data", { batchId: activeBatchId });
+      setBatch(result);
+      await loadPreview(result.id);
+      setMessage("Dados operacionais importados com rastreabilidade por lote.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Falha ao importar os registros operacionais.");
     } finally {
       setLoading(false);
     }
@@ -156,6 +178,10 @@ export default function ImportPage() {
           <UploadCloud className="size-4" />
           {loading ? "Importando..." : "Importar produtos"}
         </Button>
+        <Button type="button" onClick={runOperationalImport} disabled={loading}>
+          <UploadCloud className="size-4" />
+          {loading ? "Importando..." : "Importar produção, perdas e paradas"}
+        </Button>
         <Button type="button" className="border-slate-400/30 bg-white/5" onClick={() => loadPreview(activeBatchId)}>
           Atualizar preview
         </Button>
@@ -172,6 +198,11 @@ export default function ImportPage() {
         <StatCard label="Formulas legado" value={preview.formulaCount.toLocaleString("pt-BR")} />
         <StatCard label="Produtos normalizados" value={String(batch?.summary?.importedProducts ?? preview.productCount ?? batch?.summary?.productCount ?? 0)} status="OK" />
         <StatCard label="Inconsistencias" value={String(batch?.summary?.importErrorCount ?? preview.importErrorCount ?? totalCachedErrors)} status="ATTENTION" />
+      </div>
+      <div className="grid gap-4 md:grid-cols-3">
+        <StatCard label="Produções detectadas" value={String(preview.productionEntryCount ?? 0)} />
+        <StatCard label="Perdas detectadas" value={String(preview.lossEntryCount ?? 0)} />
+        <StatCard label="Paradas detectadas" value={String(preview.downtimeEntryCount ?? 0)} />
       </div>
 
       <DataTable title="Erros e pontos de auditoria da importacao" rows={errorRows} />

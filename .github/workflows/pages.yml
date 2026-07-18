@@ -43,6 +43,7 @@ jobs:
         run: npm run build
         env:
           NEXT_PUBLIC_DEMO_MODE: "true"
+          NEXUS_STATIC_DEMO: "true"
 
       - name: Add Pages nojekyll marker
         run: touch apps/web/out/.nojekyll

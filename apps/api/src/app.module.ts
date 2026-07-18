@@ -19,6 +19,7 @@ import { GoalsModule } from "./modules/goals/goals.module";
 import { AuditModule } from "./modules/audit/audit.module";
 import { ImportModule } from "./modules/import/import.module";
 import { BackupsModule } from "./modules/backups/backups.module";
+import { DosageModule } from "./modules/dosage/dosage.module";
 import { JwtAuthGuard } from "./modules/auth/jwt-auth.guard";
 import { RolesGuard } from "./modules/auth/roles.guard";
 
@@ -42,7 +43,8 @@ import { RolesGuard } from "./modules/auth/roles.guard";
     GoalsModule,
     AuditModule,
     ImportModule,
-    BackupsModule
+    BackupsModule,
+    DosageModule
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },

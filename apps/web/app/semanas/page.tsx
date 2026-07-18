@@ -43,13 +43,13 @@ export default function WeeksPage() {
   const [weeks, setWeeks] = useState<WeekRow[]>([]);
   const [message, setMessage] = useState("Carregando semanas da API.");
   const [loading, setLoading] = useState(false);
-  const token = useMemo(() => getSession()?.accessToken, []);
+  const session = useMemo(() => getSession(), []);
 
   async function loadWeeks() {
-    if (!token) return;
+    if (!session) return;
     setLoading(true);
     try {
-      const data = await apiGetClient<WeekRow[]>("/weeks", token);
+      const data = await apiGetClient<WeekRow[]>("/weeks");
       setWeeks(data);
       setMessage(`${data.length} semana(s) carregada(s) da API.`);
     } catch (error) {
@@ -65,13 +65,13 @@ export default function WeeksPage() {
   }, []);
 
   async function createCurrentWeek() {
-    if (!token) {
+    if (!session) {
       setMessage("Entre no sistema para criar semanas reais.");
       return;
     }
     setLoading(true);
     try {
-      await apiPostClient("/weeks", currentWeekPayload(), token);
+      await apiPostClient("/weeks", currentWeekPayload());
       await loadWeeks();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Falha ao criar semana.");
@@ -81,13 +81,13 @@ export default function WeeksPage() {
   }
 
   async function changeStatus(id: string, action: "close" | "reopen" | "archive") {
-    if (!token) {
+    if (!session) {
       setMessage("Entre no sistema para alterar status de semanas.");
       return;
     }
     setLoading(true);
     try {
-      await apiPatchClient(`/weeks/${id}/${action}`, action === "reopen" ? { reason: "Reabertura operacional via NEXUS." } : {}, token);
+      await apiPatchClient(`/weeks/${id}/${action}`, action === "reopen" ? { reason: "Reabertura operacional via NEXUS." } : {});
       await loadWeeks();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Falha ao alterar semana.");

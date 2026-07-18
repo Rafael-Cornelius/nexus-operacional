@@ -25,8 +25,8 @@ export default function HistoryPage() {
   const [message, setMessage] = useState("Aguardando sessao para carregar historico real.");
 
   async function load() {
-    const token = getSession()?.accessToken;
-    if (!token) {
+    const session = getSession();
+    if (!session) {
       setRows([]);
       setMessage("Entre no sistema para ver historico auditado do banco.");
       return;
@@ -34,7 +34,7 @@ export default function HistoryPage() {
 
     try {
       const query = moduleFilter ? `?take=100&module=${encodeURIComponent(moduleFilter)}` : "?take=100";
-      const data = await apiGetClient<AuditRow[]>(`/audit${query}`, token);
+      const data = await apiGetClient<AuditRow[]>(`/audit${query}`);
       setRows(data);
       setMessage(`${data.length} evento(s) historico(s) carregado(s).`);
     } catch (error) {

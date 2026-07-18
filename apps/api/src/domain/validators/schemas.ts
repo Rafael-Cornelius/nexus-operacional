@@ -37,7 +37,8 @@ export const productionPreviewSchema = z.object({
   weighingLossKg: z.coerce.number().nonnegative().optional().default(0),
   generatedReworkKg: z.coerce.number().nonnegative().optional().default(0),
   averagePackageWeightG: z.coerce.number().nonnegative().optional(),
-  weightConfig: productWeightConfigSchema
+  weightConfig: productWeightConfigSchema,
+  pricePerKg: z.coerce.number().nonnegative().optional().default(0)
 });
 
 export const productSchema = z.object({
@@ -52,6 +53,9 @@ export const productSchema = z.object({
   unit: z.string().default("kg"),
   overweightTolerancePercent: z.coerce.number().nonnegative().default(0.02),
   formula: z.enum(["BOX_WEIGHT", "PACKAGE_WEIGHT"]).default("BOX_WEIGHT"),
+  pricePerKg: z.coerce.number().nonnegative().default(0),
+  filmCostPerKg: z.coerce.number().nonnegative().default(0),
+  packageFilmWeightG: z.coerce.number().nonnegative().default(0),
   notes: z.string().max(2000).optional()
 });
 
@@ -63,8 +67,28 @@ export const lossEntrySchema = z.object({
   productionOrderId: uuidSchema.optional(),
   lossTypeId: uuidSchema,
   quantityKg: z.coerce.number().nonnegative(),
+  packedBoxes: z.coerce.number().nonnegative().optional().default(0),
   reason: z.string().max(240).optional(),
   notes: z.string().max(2000).optional()
+});
+
+export const dosageCheckSchema = z.object({
+  weekId: uuidSchema,
+  productId: uuidSchema,
+  sector: z.enum(["P1", "P2"]),
+  date: z.coerce.date(),
+  sampleWeightsG: z.array(z.coerce.number().positive()).min(1).max(100),
+  notes: z.string().max(2000).optional()
+});
+
+export const productPricePeriodSchema = z.object({
+  startsOn: z.coerce.date(),
+  endsOn: z.coerce.date().optional(),
+  pricePerKg: z.coerce.number().nonnegative(),
+  filmCostPerKg: z.coerce.number().nonnegative().default(0)
+}).refine((value) => !value.endsOn || value.endsOn >= value.startsOn, {
+  message: "O fim do período não pode ser anterior ao início.",
+  path: ["endsOn"]
 });
 
 export const downtimeEntrySchema = z.object({

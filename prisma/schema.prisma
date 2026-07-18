@@ -69,6 +69,11 @@ enum ImportErrorStatus {
   IGNORED
 }
 
+enum GoalCadence {
+  DAILY
+  WEEKLY
+}
+
 model User {
   id           String     @id @default(uuid()) @db.Uuid
   email        String     @unique
@@ -168,6 +173,9 @@ model Product {
   name            String
   defaultSectorId String               @map("default_sector_id") @db.Uuid
   unit            String               @default("kg")
+  pricePerKg      Decimal              @default(0) @map("price_per_kg") @db.Decimal(14, 4)
+  filmCostPerKg   Decimal              @default(0) @map("film_cost_per_kg") @db.Decimal(14, 4)
+  packageFilmWeightG Decimal            @default(0) @map("package_film_weight_g") @db.Decimal(12, 3)
   active          Boolean              @default(true)
   notes           String?
   createdAt       DateTime             @default(now()) @map("created_at")
@@ -180,9 +188,26 @@ model Product {
   orders          ProductionOrder[]
   entries         ProductionEntry[]
   losses          LossEntry[]
+  pricePeriods    ProductPricePeriod[]
+  dosageChecks    DosageCheck[]
 
   @@index([defaultSectorId])
   @@map("products")
+}
+
+model ProductPricePeriod {
+  id            String   @id @default(uuid()) @db.Uuid
+  productId     String   @map("product_id") @db.Uuid
+  startsOn      DateTime @map("starts_on") @db.Date
+  endsOn        DateTime? @map("ends_on") @db.Date
+  pricePerKg    Decimal  @map("price_per_kg") @db.Decimal(14, 4)
+  filmCostPerKg Decimal  @default(0) @map("film_cost_per_kg") @db.Decimal(14, 4)
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+  product       Product  @relation(fields: [productId], references: [id])
+
+  @@index([productId, startsOn])
+  @@map("product_price_periods")
 }
 
 model ProductWeightConfig {
@@ -213,6 +238,7 @@ model WeeklyPeriod {
   status              WeekStatus          @default(OPEN)
   closedAt            DateTime?           @map("closed_at")
   archivedAt          DateTime?           @map("archived_at")
+  snapshotData        Json?               @map("snapshot_data")
   createdAt           DateTime            @default(now()) @map("created_at")
   updatedAt           DateTime            @updatedAt @map("updated_at")
   deletedAt           DateTime?           @map("deleted_at")
@@ -222,6 +248,7 @@ model WeeklyPeriod {
   downtimes           DowntimeEntry[]
   productivityEntries ProductivityEntry[]
   snapshots           DashboardSnapshot[]
+  dosageChecks        DosageCheck[]
 
   @@unique([year, month, weekNumber])
   @@index([status])
@@ -272,6 +299,10 @@ model ProductionEntry {
   overweightGPerPackage Decimal          @map("overweight_g_per_package") @db.Decimal(12, 3)
   overweightTotalKg     Decimal          @map("overweight_total_kg") @db.Decimal(14, 3)
   overweightPercent     Decimal          @map("overweight_percent") @db.Decimal(10, 6)
+  unitPricePerKg        Decimal          @default(0) @map("unit_price_per_kg") @db.Decimal(14, 4)
+  productionCost        Decimal          @default(0) @map("production_cost") @db.Decimal(14, 2)
+  lossesCost            Decimal          @default(0) @map("losses_cost") @db.Decimal(14, 2)
+  overweightCost        Decimal          @default(0) @map("overweight_cost") @db.Decimal(14, 2)
   status                AlertStatus      @default(OK)
   notes                 String?
   createdAt             DateTime         @default(now()) @map("created_at")
@@ -313,6 +344,14 @@ model LossEntry {
   productionOrderId String?          @map("production_order_id") @db.Uuid
   lossTypeId        String           @map("loss_type_id") @db.Uuid
   quantityKg        Decimal          @map("quantity_kg") @db.Decimal(12, 3)
+  unitCost          Decimal          @default(0) @map("unit_cost") @db.Decimal(14, 4)
+  lossCost          Decimal          @default(0) @map("loss_cost") @db.Decimal(14, 2)
+  packedBoxes       Decimal          @default(0) @map("packed_boxes") @db.Decimal(12, 3)
+  packageFilmWeightG Decimal         @default(0) @map("package_film_weight_g") @db.Decimal(12, 3)
+  filmCostPerKg     Decimal          @default(0) @map("film_cost_per_kg") @db.Decimal(14, 4)
+  filmUsedKg        Decimal          @default(0) @map("film_used_kg") @db.Decimal(14, 3)
+  filmUsedValue     Decimal          @default(0) @map("film_used_value") @db.Decimal(14, 2)
+  financialResult   Decimal          @default(0) @map("financial_result") @db.Decimal(14, 2)
   reason            String?
   notes             String?
   createdAt         DateTime         @default(now()) @map("created_at")
@@ -399,6 +438,8 @@ model Goal {
   sectorCode  SectorCode? @map("sector_code")
   targetValue Decimal     @map("target_value") @db.Decimal(14, 6)
   comparator  String      @default("<=")
+  cadence     GoalCadence @default(WEEKLY)
+  dueDate     DateTime?   @map("due_date") @db.Date
   active      Boolean     @default(true)
   createdAt   DateTime    @default(now()) @map("created_at")
   updatedAt   DateTime    @updatedAt @map("updated_at")
@@ -406,6 +447,28 @@ model Goal {
 
   @@index([metric, active])
   @@map("goals")
+}
+
+model DosageCheck {
+  id                 String       @id @default(uuid()) @db.Uuid
+  weekId             String       @map("week_id") @db.Uuid
+  productId          String       @map("product_id") @db.Uuid
+  sectorCode         SectorCode   @map("sector_code")
+  date               DateTime     @db.Date
+  targetWeightG      Decimal      @map("target_weight_g") @db.Decimal(12, 3)
+  sampleWeightsG     Json         @map("sample_weights_g")
+  sampleCount        Int          @map("sample_count")
+  averageWeightG     Decimal      @map("average_weight_g") @db.Decimal(12, 3)
+  standardDeviationG Decimal      @map("standard_deviation_g") @db.Decimal(12, 3)
+  overweightG        Decimal      @map("overweight_g") @db.Decimal(12, 3)
+  notes              String?
+  createdAt          DateTime     @default(now()) @map("created_at")
+  updatedAt          DateTime     @updatedAt @map("updated_at")
+  week               WeeklyPeriod @relation(fields: [weekId], references: [id])
+  product            Product      @relation(fields: [productId], references: [id])
+
+  @@index([weekId, productId, date])
+  @@map("dosage_checks")
 }
 
 model DashboardSnapshot {

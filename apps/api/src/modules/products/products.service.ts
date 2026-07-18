@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../../infrastructure/database/prisma.service";
-import { productSchema } from "../../domain/validators/schemas";
+import { productPricePeriodSchema, productSchema } from "../../domain/validators/schemas";
 import { AuditService } from "../audit/audit.service";
 import { CurrentUser } from "../../infrastructure/security/current-user";
 
@@ -40,6 +40,9 @@ export class ProductsService {
         name: input.name,
         defaultSectorId: sector.id,
         unit: input.unit,
+        pricePerKg: input.pricePerKg,
+        filmCostPerKg: input.filmCostPerKg,
+        packageFilmWeightG: input.packageFilmWeightG,
         notes: input.notes,
         createdBy: userId,
         updatedBy: userId,
@@ -79,6 +82,9 @@ export class ProductsService {
         name: input.name,
         defaultSectorId: sector?.id,
         unit: input.unit,
+        pricePerKg: input.pricePerKg,
+        filmCostPerKg: input.filmCostPerKg,
+        packageFilmWeightG: input.packageFilmWeightG,
         notes: input.notes,
         updatedBy: userId,
         weightConfig: input.boxWeightKg
@@ -111,6 +117,40 @@ export class ProductsService {
 
     await this.audit.record({ userId, module: "products", action: "update", entity: "Product", entityId: id, before: current, after: product });
     return product;
+  }
+
+  pricePeriods(productId: string) {
+    return this.prisma.productPricePeriod.findMany({
+      where: { productId },
+      orderBy: { startsOn: "desc" }
+    });
+  }
+
+  async addPricePeriod(productId: string, payload: unknown, user?: CurrentUser) {
+    const input = productPricePeriodSchema.parse(payload);
+    const product = await this.prisma.product.findUnique({ where: { id: productId } });
+    if (!product || product.deletedAt) throw new NotFoundException("Produto nao encontrado.");
+
+    const period = await this.prisma.productPricePeriod.create({
+      data: { productId, ...input }
+    });
+    await this.prisma.product.update({
+      where: { id: productId },
+      data: {
+        pricePerKg: input.pricePerKg,
+        filmCostPerKg: input.filmCostPerKg,
+        updatedBy: this.safeUserId(user)
+      }
+    });
+    await this.audit.record({
+      userId: this.safeUserId(user),
+      module: "products",
+      action: "add_price_period",
+      entity: "ProductPricePeriod",
+      entityId: period.id,
+      after: period
+    });
+    return period;
   }
 
   async deactivate(id: string, user?: CurrentUser) {

@@ -70,7 +70,7 @@ If you need a lightweight production deployment on the same host, you can keep u
 
 The repository includes a manual GitHub Actions workflow for a static public demo only. It must not be used as the operational deployment for real company data.
 
-- Frontend build: `NEXT_PUBLIC_DEMO_MODE=true npm run build --workspace=@nexus/web`
+- Frontend build: `NEXUS_STATIC_DEMO=true NEXT_PUBLIC_DEMO_MODE=true npm run build --workspace=@nexus/web`
 - Pages artifact: `apps/web/out`
 
 When the manual workflow is approved and GitHub Pages is enabled for this repository, the demo frontend will be published at:

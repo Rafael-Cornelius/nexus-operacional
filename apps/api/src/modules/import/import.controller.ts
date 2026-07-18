@@ -30,4 +30,10 @@ export class ImportController {
   importProducts(@Body() body: { batchId?: string }, @CurrentUserData() user?: CurrentUser) {
     return this.imports.importProducts(body.batchId, user);
   }
+
+  @Throttle({ default: { limit: 3, ttl: 60_000 } })
+  @Post("operational-data")
+  importOperationalData(@Body() body: { batchId?: string }, @CurrentUserData() user?: CurrentUser) {
+    return this.imports.importOperationalData(body.batchId, user);
+  }
 }

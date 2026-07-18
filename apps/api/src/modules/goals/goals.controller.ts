@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post } from "@nestjs/common";
+import { Body, Controller, Get, Post, Query } from "@nestjs/common";
 import { CurrentUser } from "../../infrastructure/security/current-user";
 import { CurrentUserData } from "../auth/current-user.decorator";
 import { Roles } from "../auth/roles.decorator";
@@ -10,8 +10,8 @@ export class GoalsController {
 
   @Roles("ADMIN", "MANAGER", "SUPERVISOR", "VIEWER")
   @Get()
-  list() {
-    return this.goals.list();
+  list(@Query("weekId") weekId?: string) {
+    return this.goals.list(weekId);
   }
 
   @Roles("ADMIN", "MANAGER")

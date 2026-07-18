@@ -16,7 +16,7 @@ Etapas executadas no CI:
 - `npm run lint`
 - `npm run typecheck`
 - `npm test`
-- `npm run build` em `apps/web`
+- `NEXUS_STATIC_DEMO=true NEXT_PUBLIC_DEMO_MODE=true npm run build` em `apps/web`
 - upload de `apps/web/out`
 
 URL esperada:

@@ -4,13 +4,23 @@ import { Maximize2, RefreshCcw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, StatCard } from "@/components/ui/card";
-import { kpis, downtimeByReason } from "@/lib/demo-data";
+import { createDemoExecutiveDeck } from "@/lib/demo/operational-preview";
 import { formatKg, formatPercent } from "@/lib/format";
-import { apiGetClient, getSession } from "@/services/api";
+import { apiGetClient, DEMO_MODE, getSession } from "@/services/api";
 
 interface ExecutiveDeck {
   generatedAt: string;
+  source: "database" | "demo-preview";
+  week: { id: string; label: string; startsOn: string; endsOn: string; status: string } | null;
   slides: Array<{ title: string; kind: string; data: unknown }>;
+}
+
+interface WeekRow {
+  id: string;
+  label: string;
+  startsOn: string;
+  endsOn: string;
+  status: string;
 }
 
 interface KpiPayload {
@@ -52,20 +62,37 @@ function asDowntime(data: unknown): DowntimePayload[] {
 
 export function MeetingMode() {
   const [deck, setDeck] = useState<ExecutiveDeck | null>(null);
+  const [weeks, setWeeks] = useState<WeekRow[]>([]);
+  const [selectedWeekId, setSelectedWeekId] = useState("");
   const [message, setMessage] = useState("Aguardando API para gerar apresentacao executiva.");
 
-  async function loadDeck() {
-    const token = getSession()?.accessToken;
-    if (!token) {
+  async function loadDeck(nextWeekId = selectedWeekId) {
+    if (DEMO_MODE) {
+      const demoDeck = createDemoExecutiveDeck();
+      setDeck(demoDeck);
+      setMessage("Preview demonstrativo isolado; nenhum dado operacional real foi usado.");
+      return;
+    }
+
+    if (!getSession()) {
       setDeck(null);
       setMessage("Entre no sistema para gerar apresentacao executiva com dados reais.");
       return;
     }
 
     try {
-      const data = await apiGetClient<ExecutiveDeck>("/presentations/executive", token);
+      const weekRows = await apiGetClient<WeekRow[]>("/weeks");
+      const weekId = nextWeekId || weekRows[0]?.id || "";
+      setWeeks(weekRows);
+      setSelectedWeekId(weekId);
+      if (!weekId) {
+        setDeck(null);
+        setMessage("Cadastre uma semana operacional antes de gerar a apresentação.");
+        return;
+      }
+      const data = await apiGetClient<ExecutiveDeck>(`/presentations/executive?weekId=${encodeURIComponent(weekId)}`);
       setDeck(data);
-      setMessage(`Apresentacao gerada em ${new Date(data.generatedAt).toLocaleString("pt-BR")}.`);
+      setMessage(`Dados reais da API — ${data.week?.label ?? "semana selecionada"}; apresentação gerada em ${new Date(data.generatedAt).toLocaleString("pt-BR")}.`);
     } catch (error) {
       setDeck(null);
       setMessage(error instanceof Error ? error.message : "Nao foi possivel gerar a apresentacao.");
@@ -84,8 +111,7 @@ export function MeetingMode() {
 
   const downtime = useMemo(() => {
     const slide = deck?.slides.find((item) => item.kind === "downtime");
-    const rows = asDowntime(slide?.data);
-    return rows.length ? rows : downtimeByReason.map((item) => ({ reason: item.reason, stoppedMinutes: item.minutes }));
+    return asDowntime(slide?.data);
   }, [deck]);
 
   const stats = executiveKpis
@@ -94,11 +120,7 @@ export function MeetingMode() {
         { label: "Perdas totais", value: formatKg(executiveKpis.lossesTotalKg), status: executiveKpis.lossesTotalKg > 80 ? "ATTENTION" as const : "OK" as const },
         { label: "Rendimento medio", value: formatPercent(executiveKpis.averageYield), status: executiveKpis.averageYield < 0.9 ? "ATTENTION" as const : "OK" as const }
       ]
-    : kpis.slice(0, 3).map((kpi) => ({
-        label: kpi.label,
-        value: kpi.suffix === "kg" ? formatKg(kpi.value) : formatPercent(kpi.value),
-        status: kpi.status
-      }));
+    : [];
 
   return (
     <div className="space-y-6">
@@ -110,7 +132,12 @@ export function MeetingMode() {
             <p className="mt-3 max-w-3xl text-slate-300">Producao, perdas, sobrepeso, paradas, eficiencia e plano de acao em uma narrativa unica para tomada de decisao.</p>
           </div>
           <div className="flex gap-2">
-            <Button className="border-white/15 bg-white/10 text-white hover:bg-white/15" onClick={loadDeck}>
+            {!DEMO_MODE && weeks.length ? (
+              <select className="rounded-md border border-white/15 bg-[#111827] px-3 py-2 text-sm text-slate-100" value={selectedWeekId} onChange={(event) => void loadDeck(event.target.value)}>
+                {weeks.map((week) => <option key={week.id} value={week.id}>{week.label} — {week.status}</option>)}
+              </select>
+            ) : null}
+            <Button className="border-white/15 bg-white/10 text-white hover:bg-white/15" onClick={() => void loadDeck()}>
               <RefreshCcw className="size-4" />
               Gerar
             </Button>
@@ -129,14 +156,14 @@ export function MeetingMode() {
       </div>
       <Card>
         <h3 className="mb-4 text-lg font-semibold">Pontos criticos</h3>
-        <div className="grid gap-3 md:grid-cols-3">
+        {downtime.length ? <div className="grid gap-3 md:grid-cols-3">
           {downtime.slice(0, 3).map((item) => (
             <div key={item.reason} className="rounded-md border border-[var(--line)] bg-white/5 p-4">
               <p className="text-sm text-slate-400">{item.reason}</p>
               <strong className="mt-2 block text-2xl">{item.stoppedMinutes} min</strong>
             </div>
           ))}
-        </div>
+        </div> : <p className="text-sm text-slate-400">Nenhuma parada registrada para a semana selecionada.</p>}
       </Card>
     </div>
   );

@@ -37,4 +37,10 @@ export class WeeksController {
   archive(@Param("id") id: string, @CurrentUserData() user?: CurrentUser) {
     return this.weeks.archive(id, user);
   }
+
+  @Roles("ADMIN", "MANAGER", "SUPERVISOR", "VIEWER")
+  @Get(":id/snapshot")
+  snapshot(@Param("id") id: string) {
+    return this.weeks.snapshot(id);
+  }
 }

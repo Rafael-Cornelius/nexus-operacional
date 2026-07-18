@@ -2,6 +2,7 @@ import { Injectable } from "@nestjs/common";
 import { PrismaService } from "../../infrastructure/database/prisma.service";
 import { CurrentUser } from "../../infrastructure/security/current-user";
 import { AuditService } from "../audit/audit.service";
+import { DashboardService } from "../dashboard/dashboard.service";
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -9,7 +10,8 @@ const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}
 export class ReportsService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly audit: AuditService
+    private readonly audit: AuditService,
+    private readonly dashboard: DashboardService
   ) {}
 
   async weeklyProduction(weekId?: string, user?: CurrentUser) {
@@ -46,6 +48,51 @@ export class ReportsService {
       after: { type: exportRow.type, filters: exportRow.filters, status: exportRow.status }
     });
     return { exportId: exportRow.id, format: "csv", csv };
+  }
+
+  async weeklySummary(weekId: string | undefined, user?: CurrentUser) {
+    const week = weekId
+      ? await this.prisma.weeklyPeriod.findUnique({ where: { id: weekId } })
+      : await this.prisma.weeklyPeriod.findFirst({ where: { deletedAt: null }, orderBy: { endsOn: "desc" } });
+    if (!week) return { week: null, summary: null, daily: [], sectors: [], alerts: [], comparison: null };
+
+    const [kpis, comparison, alerts, dailyRows] = await Promise.all([
+      this.dashboard.kpis(week.id),
+      this.dashboard.comparison(week.id),
+      this.dashboard.alerts(week.id),
+      this.prisma.productionEntry.groupBy({
+        by: ["date"],
+        where: { deletedAt: null, weekId: week.id },
+        _sum: { producedKg: true, weighingLossKg: true, overweightTotalKg: true },
+        _avg: { realYieldPercent: true }
+      })
+    ]);
+    const result = {
+      week: { id: week.id, label: week.label, startsOn: week.startsOn, endsOn: week.endsOn, status: week.status },
+      summary: kpis,
+      sectors: kpis.financialBySector,
+      daily: dailyRows.map((day) => ({
+        date: day.date,
+        producedKg: Number(day._sum.producedKg ?? 0),
+        lossesKg: Number(day._sum.weighingLossKg ?? 0),
+        overweightKg: Number(day._sum.overweightTotalKg ?? 0),
+        averageYield: Number(day._avg.realYieldPercent ?? 0)
+      })),
+      alerts,
+      comparison
+    };
+    const exportRow = await this.prisma.reportExport.create({
+      data: { type: "weekly-operational-summary", filters: { weekId: week.id }, status: "GENERATED", createdBy: this.safeUserId(user) }
+    });
+    await this.audit.record({
+      userId: this.safeUserId(user),
+      module: "reports",
+      action: "weekly_summary",
+      entity: "ReportExport",
+      entityId: exportRow.id,
+      after: { type: exportRow.type, filters: exportRow.filters, status: exportRow.status }
+    });
+    return { exportId: exportRow.id, ...result };
   }
 
   private safeUserId(user?: CurrentUser) {

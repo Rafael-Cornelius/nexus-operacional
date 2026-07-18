@@ -1,17 +1,18 @@
 import type { NextConfig } from "next";
 
+const staticDemo = process.env.NEXUS_STATIC_DEMO === "true";
+
 const nextConfig: NextConfig = {
   reactStrictMode: true,
-  output: "export",
-  basePath: "/nexus-operacional",
-  trailingSlash: true,
+  ...(staticDemo
+    ? {
+        output: "export" as const,
+        basePath: "/nexus-operacional",
+        trailingSlash: true,
+        images: { unoptimized: true }
+      }
+    : {}),
   devIndicators: false,
-  images: {
-    unoptimized: true
-  },
-  eslint: {
-    ignoreDuringBuilds: true
-  },
   experimental: {
     optimizePackageImports: ["lucide-react", "echarts-for-react"]
   },

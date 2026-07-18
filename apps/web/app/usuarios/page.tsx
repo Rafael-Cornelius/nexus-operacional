@@ -35,13 +35,13 @@ export default function UsersPage() {
   const [roles, setRoles] = useState<RoleCode[]>(["VIEWER"]);
   const [message, setMessage] = useState("Aguardando login de administrador para carregar usuarios reais.");
   const [loading, setLoading] = useState(false);
-  const token = useMemo(() => getSession()?.accessToken, []);
+  const session = useMemo(() => getSession(), []);
 
   async function loadUsers() {
-    if (!token) return;
+    if (!session) return;
     setLoading(true);
     try {
-      const data = await apiGetClient<UserRow[]>("/users", token);
+      const data = await apiGetClient<UserRow[]>("/users");
       setUsers(data);
       setMessage(data.length ? `${data.length} usuario(s) carregado(s) da API.` : "Nenhum usuario retornado pela API.");
     } catch (error) {
@@ -57,7 +57,7 @@ export default function UsersPage() {
   }, []);
 
   async function createUser() {
-    if (!token) {
+    if (!session) {
       setMessage("Entre como administrador para criar usuarios.");
       return;
     }
@@ -67,7 +67,7 @@ export default function UsersPage() {
     }
     setLoading(true);
     try {
-      await apiPostClient("/users", { name, email, password, roles }, token);
+      await apiPostClient("/users", { name, email, password, roles });
       await loadUsers();
       setMessage("Usuario criado com perfis RBAC.");
     } catch (error) {

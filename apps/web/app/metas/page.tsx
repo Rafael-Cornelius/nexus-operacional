@@ -17,25 +17,42 @@ interface GoalRow {
   comparator: string;
   active: boolean;
   updatedAt?: string;
+  cadence?: "DAILY" | "WEEKLY";
+  dueDate?: string | null;
+  currentValue?: number;
+  progress?: number;
+  status?: string;
+  action?: string;
 }
+
+interface WeekRow { id: string; label: string; status: string }
 
 export default function GoalsPage() {
   const [goals, setGoals] = useState<GoalRow[]>([]);
+  const [weeks, setWeeks] = useState<WeekRow[]>([]);
+  const [weekId, setWeekId] = useState("");
   const [name, setName] = useState("");
   const [metric, setMetric] = useState("yield");
   const [sectorCode, setSectorCode] = useState("");
   const [targetValue, setTargetValue] = useState(0.95);
   const [comparator, setComparator] = useState(">=");
+  const [cadence, setCadence] = useState<"DAILY" | "WEEKLY">("WEEKLY");
+  const [dueDate, setDueDate] = useState("");
   const [message, setMessage] = useState("Aguardando login para carregar metas reais.");
   const [loading, setLoading] = useState(false);
-  const token = useMemo(() => getSession()?.accessToken, []);
+  const session = useMemo(() => getSession(), []);
 
-  async function loadGoals() {
-    if (!token) return;
+  async function loadGoals(nextWeekId = weekId) {
+    if (!session) return;
     setLoading(true);
     try {
-      const data = await apiGetClient<GoalRow[]>("/goals", token);
+      const [data, weekRows] = await Promise.all([
+        apiGetClient<GoalRow[]>(`/goals${nextWeekId ? `?weekId=${nextWeekId}` : ""}`),
+        apiGetClient<WeekRow[]>("/weeks")
+      ]);
       setGoals(data);
+      setWeeks(weekRows);
+      setWeekId((current) => current || weekRows.find((week) => week.status === "OPEN" || week.status === "REVIEW")?.id || weekRows[0]?.id || "");
       setMessage(data.length ? `${data.length} meta(s) carregada(s) da API.` : "Nenhuma meta cadastrada.");
     } catch (error) {
       setGoals([]);
@@ -50,13 +67,13 @@ export default function GoalsPage() {
   }, []);
 
   async function saveGoal() {
-    if (!token) {
+    if (!session) {
       setMessage("Entre no sistema com perfil gestor ou administrador para salvar metas.");
       return;
     }
     setLoading(true);
     try {
-      await apiPostClient("/goals", { name, metric, sectorCode: sectorCode || undefined, targetValue, comparator, active: true }, token);
+      await apiPostClient("/goals", { name, metric, sectorCode: sectorCode || undefined, targetValue, comparator, cadence, dueDate: dueDate || undefined, active: true });
       await loadGoals();
       setMessage("Meta salva e disponivel para acompanhamento.");
     } catch (error) {
@@ -75,18 +92,21 @@ export default function GoalsPage() {
 
       <Card>
         <div className="grid gap-4 md:grid-cols-5">
+          <Select label="Semana de acompanhamento" value={weekId} onChange={(value) => { setWeekId(value); void loadGoals(value); }} options={[{ value: "", label: "Todas as semanas" }, ...weeks.map((week) => ({ value: week.id, label: `${week.label} - ${week.status}` }))]} />
           <Input label="Nome" value={name} onChange={setName} />
           <Select label="Metrica" value={metric} onChange={setMetric} options={[{ value: "yield", label: "Rendimento" }, { value: "overweight", label: "Sobrepeso" }, { value: "losses_kg", label: "Perdas kg" }, { value: "downtime_minutes", label: "Paradas min" }, { value: "produced_kg", label: "Producao kg" }]} />
           <Select label="Setor" value={sectorCode} onChange={setSectorCode} options={[{ value: "", label: "Global" }, { value: "P1", label: "P1" }, { value: "P2", label: "P2" }]} />
           <Select label="Comparador" value={comparator} onChange={setComparator} options={[{ value: "<=", label: "<=" }, { value: ">=", label: ">=" }, { value: "<", label: "<" }, { value: ">", label: ">" }, { value: "=", label: "=" }]} />
           <NumberInput label="Valor alvo" value={targetValue} onChange={setTargetValue} />
+          <Select label="Periodicidade" value={cadence} onChange={(value) => setCadence(value as "DAILY" | "WEEKLY")} options={[{ value: "DAILY", label: "Diária" }, { value: "WEEKLY", label: "Semanal" }]} />
+          <Input label="Prazo" type="date" value={dueDate} onChange={setDueDate} />
         </div>
         <div className="mt-4 flex flex-wrap gap-3">
           <Button type="button" onClick={saveGoal} disabled={loading}>
             <Save className="size-4" />
             Salvar meta
           </Button>
-          <Button type="button" className="border-slate-400/30 bg-white/5" onClick={loadGoals} disabled={loading}>
+          <Button type="button" className="border-slate-400/30 bg-white/5" onClick={() => void loadGoals()} disabled={loading}>
             <RefreshCw className="size-4" />
             Atualizar
           </Button>
@@ -108,7 +128,12 @@ export default function GoalsPage() {
           Setor: goal.sectorCode ?? "Global",
           Comparador: goal.comparator,
           Valor: Number(goal.targetValue).toLocaleString("pt-BR", { maximumFractionDigits: 4 }),
-          Status: goal.active ? "Ativa" : "Inativa"
+          Atual: Number(goal.currentValue ?? 0).toLocaleString("pt-BR", { maximumFractionDigits: 4 }),
+          Progresso: `${Math.round(Number(goal.progress ?? 0) * 100)}%`,
+          Periodicidade: goal.cadence === "DAILY" ? "Diária" : "Semanal",
+          Prazo: goal.dueDate?.slice(0, 10) ?? "-",
+          Status: goal.active ? goal.status ?? "Ativa" : "Inativa",
+          "Ação recomendada": goal.action ?? "-"
         }))}
       />
     </div>
@@ -126,11 +151,11 @@ function Select({ label, value, onChange, options }: { label: string; value: str
   );
 }
 
-function Input({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+function Input({ label, value, onChange, type = "text" }: { label: string; value: string; onChange: (value: string) => void; type?: string }) {
   return (
     <label className="space-y-2">
       <span className="text-xs uppercase text-slate-400">{label}</span>
-      <input className="w-full rounded-md border border-[var(--line)] bg-white/5 px-3 py-2 text-sm outline-none focus:border-cyan-300/60" value={value} onChange={(event) => onChange(event.target.value)} />
+      <input type={type} className="w-full rounded-md border border-[var(--line)] bg-white/5 px-3 py-2 text-sm outline-none focus:border-cyan-300/60" value={value} onChange={(event) => onChange(event.target.value)} />
     </label>
   );
 }

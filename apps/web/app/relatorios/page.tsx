@@ -18,16 +18,16 @@ export default function ReportsPage() {
   const [report, setReport] = useState<WeeklyReport | null>(null);
   const [message, setMessage] = useState("CSV semanal pronto para ser gerado quando a API estiver autenticada.");
   const [loading, setLoading] = useState(false);
-  const token = useMemo(() => getSession()?.accessToken, []);
+  const session = useMemo(() => getSession(), []);
 
   async function generateCsv() {
-    if (!token) {
+    if (!session) {
       setMessage("Entre no sistema para gerar relatorios reais.");
       return;
     }
     setLoading(true);
     try {
-      const data = await apiGetClient<WeeklyReport>("/reports/weekly-production", token);
+      const data = await apiGetClient<WeeklyReport>("/reports/weekly-production");
       setReport(data);
       setMessage(`Relatorio CSV gerado. Export ID: ${data.exportId}`);
     } catch (error) {

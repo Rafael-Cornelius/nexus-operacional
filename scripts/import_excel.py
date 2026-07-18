@@ -7,6 +7,7 @@ import posixpath
 import re
 import zipfile
 from collections import Counter
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree as ET
@@ -134,6 +135,32 @@ def as_int(value: Any) -> int | None:
     if number is None:
         return None
     return int(round(number))
+
+
+def excel_date(value: Any) -> str | None:
+    number = as_number(value)
+    if number is not None and number > 20_000:
+        return (datetime(1899, 12, 30) + timedelta(days=number)).date().isoformat()
+    text = clean_text(value)
+    if not text:
+        return None
+    for pattern in ("%Y-%m-%d", "%d/%m/%Y", "%d/%m/%y"):
+        try:
+            return datetime.strptime(text, pattern).date().isoformat()
+        except ValueError:
+            pass
+    return None
+
+
+def excel_time(value: Any) -> str | None:
+    number = as_number(value)
+    if number is not None and 0 <= number < 1:
+        seconds = int(round(number * 24 * 60 * 60)) % (24 * 60 * 60)
+        return f"{seconds // 3600:02d}:{(seconds % 3600) // 60:02d}:00"
+    text = clean_text(value)
+    if text and re.fullmatch(r"\d{1,2}:\d{2}(:\d{2})?", text):
+        return text if len(text.split(":")) == 3 else f"{text}:00"
+    return None
 
 
 def import_error(sheet: str, row: int, column: int, field: str, message: str, raw: Any = None) -> dict[str, Any]:
@@ -287,6 +314,106 @@ def extract_legacy_products(
     }
 
 
+def extract_operational_data(zf: zipfile.ZipFile, shared: list[str], sheet_paths: dict[str, str]) -> dict[str, Any]:
+    errors: list[dict[str, Any]] = []
+    production_entries: list[dict[str, Any]] = []
+    loss_entries: list[dict[str, Any]] = []
+    downtime_entries: list[dict[str, Any]] = []
+
+    def add_production(sheet: str, sector: str, columns: dict[str, int]) -> None:
+        if sheet not in sheet_paths:
+            return
+        for row_number, row in read_sheet_rows(zf, shared, sheet_paths[sheet]).items():
+            week_number = as_int(row.get(columns["week"]))
+            date = excel_date(row.get(columns["date"]))
+            product_code = normalize_code(row.get(columns["product"]))
+            if not week_number or not date or not product_code:
+                continue
+            planned = as_number(row.get(columns["planned"]))
+            realized = as_number(row.get(columns["realized"]))
+            packed_boxes = as_number(row.get(columns["boxes"]))
+            if planned is None or realized is None or packed_boxes is None:
+                errors.append(import_error(sheet, row_number, columns["boxes"], "production", "Production row without planned, realized batches or packed boxes."))
+                continue
+            production_entries.append({
+                "sheetName": sheet,
+                "rowNumber": row_number,
+                "sector": sector,
+                "legacyWeekNumber": week_number,
+                "date": date,
+                "productCode": product_code,
+                "productionOrder": clean_text(row.get(columns["op"])) or f"LEG-{sheet}-{row_number}",
+                "plannedBatches": planned,
+                "realizedBatches": realized,
+                "usedReworkKg": as_number(row.get(columns.get("usedRework", 0))) or 0,
+                "packedBoxes": packed_boxes,
+                "weighingLossKg": as_number(row.get(columns["weighingLoss"])) or 0,
+                "generatedReworkKg": as_number(row.get(columns["generatedRework"])) or 0,
+                "averagePackageWeightG": as_number(row.get(columns["averageWeight"])),
+                "notes": clean_text(row.get(columns["notes"])),
+                "pricePerKg": as_number(row.get(columns["pricePerKg"])) or 0,
+            })
+
+    add_production("Plan x Real (P1)", "P1", {
+        "week": 2, "date": 3, "product": 4, "op": 5, "planned": 6, "realized": 7, "usedRework": 8,
+        "boxes": 9, "weighingLoss": 11, "generatedRework": 12, "averageWeight": 18, "notes": 22, "pricePerKg": 23,
+    })
+    add_production("Plan x Real (P2)", "P2", {
+        "week": 2, "date": 3, "product": 4, "op": 5, "planned": 6, "realized": 7,
+        "boxes": 8, "weighingLoss": 10, "generatedRework": 11, "averageWeight": 17, "notes": 21, "pricePerKg": 22,
+    })
+
+    loss_sheet = "CONTROLE DE PERDAS"
+    if loss_sheet in sheet_paths:
+        for row_number, row in read_sheet_rows(zf, shared, sheet_paths[loss_sheet]).items():
+            date = excel_date(row.get(2))
+            quantity = as_number(row.get(4))
+            machine = clean_text(row.get(3))
+            if not date or quantity is None or not machine:
+                continue
+            loss_entries.append({
+                "sheetName": loss_sheet,
+                "rowNumber": row_number,
+                "date": date,
+                "quantityKg": quantity,
+                "legacyLine": machine,
+                "lossType": "PACKAGING",
+                "notes": f"Importado do controle de perdas; máquina: {machine}",
+            })
+
+    downtime_sheet = "relatorios de paradas"
+    if downtime_sheet in sheet_paths:
+        for row_number, row in read_sheet_rows(zf, shared, sheet_paths[downtime_sheet]).items():
+            date = excel_date(row.get(1))
+            production_start, production_end = excel_time(row.get(2)), excel_time(row.get(3))
+            downtime_start, downtime_end = excel_time(row.get(4)), excel_time(row.get(5))
+            reason, legacy_line = clean_text(row.get(6)), clean_text(row.get(7))
+            if not all([date, production_start, production_end, downtime_start, downtime_end, reason, legacy_line]):
+                continue
+            downtime_entries.append({
+                "sheetName": downtime_sheet,
+                "rowNumber": row_number,
+                "date": date,
+                "productionStart": production_start,
+                "productionEnd": production_end,
+                "downtimeStart": downtime_start,
+                "downtimeEnd": downtime_end,
+                "reason": reason,
+                "legacyLine": legacy_line,
+                "legacyWeekNumber": as_int(row.get(8)),
+            })
+
+    return {
+        "productionEntries": production_entries,
+        "productionEntryCount": len(production_entries),
+        "lossEntries": loss_entries,
+        "lossEntryCount": len(loss_entries),
+        "downtimeEntries": downtime_entries,
+        "downtimeEntryCount": len(downtime_entries),
+        "operationalImportErrors": errors,
+    }
+
+
 def inspect_workbook(path: Path) -> dict[str, Any]:
     with zipfile.ZipFile(path) as zf:
         names = zf.namelist()
@@ -351,7 +478,7 @@ def inspect_workbook(path: Path) -> dict[str, Any]:
             "tableCount": len(tables),
             "chartCount": len(charts),
             "errors": dict(errors),
-            "legacyData": extract_legacy_products(zf, shared, sheet_paths),
+            "legacyData": {**extract_legacy_products(zf, shared, sheet_paths), **extract_operational_data(zf, shared, sheet_paths)},
         }
 
 

@@ -45,18 +45,18 @@ export default function ProductivityPage() {
   const [summary, setSummary] = useState<ProductivitySummary>(emptySummary);
   const [message, setMessage] = useState("Carregando produtividade da API.");
   const [loading, setLoading] = useState(false);
-  const token = useMemo(() => getSession()?.accessToken, []);
+  const session = useMemo(() => getSession(), []);
 
   async function loadSummary(nextWeekId = weekId) {
-    if (!token) return;
+    if (!session) return;
     setLoading(true);
     try {
-      const weekRows = await apiGetClient<WeekRow[]>("/weeks", token);
+      const weekRows = await apiGetClient<WeekRow[]>("/weeks");
       const selectedWeek = nextWeekId || weekRows.find((week) => week.status !== "CLOSED" && week.status !== "ARCHIVED")?.id || weekRows[0]?.id || "";
       setWeeks(weekRows);
       setWeekId(selectedWeek);
       const query = selectedWeek ? `?weekId=${selectedWeek}` : "";
-      const data = await apiGetClient<ProductivitySummary>(`/productivity/summary${query}`, token);
+      const data = await apiGetClient<ProductivitySummary>(`/productivity/summary${query}`);
       setSummary(data);
       setMessage(data.records ? "Produtividade carregada da API." : "Sem producao na semana selecionada.");
     } catch (error) {

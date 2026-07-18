@@ -23,13 +23,13 @@ export default function AuditPage() {
   const [rows, setRows] = useState<AuditRow[]>([]);
   const [message, setMessage] = useState("Aguardando login para carregar auditoria real.");
   const [loading, setLoading] = useState(false);
-  const token = useMemo(() => getSession()?.accessToken, []);
+  const session = useMemo(() => getSession(), []);
 
   async function loadAudit() {
-    if (!token) return;
+    if (!session) return;
     setLoading(true);
     try {
-      const data = await apiGetClient<AuditRow[]>("/audit?take=50", token);
+      const data = await apiGetClient<AuditRow[]>("/audit?take=50");
       setRows(data);
       setMessage(`${data.length} evento(s) de auditoria carregado(s).`);
     } catch (error) {

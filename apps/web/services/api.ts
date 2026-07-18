@@ -1,7 +1,9 @@
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "/api";
+export const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
+export const DEMO_ADMIN_EMAIL = process.env.NEXT_PUBLIC_DEMO_ADMIN_EMAIL ?? "admin@nexus.local";
+export const DEMO_ADMIN_PASSWORD = process.env.NEXT_PUBLIC_DEMO_ADMIN_PASSWORD ?? "";
 
 const sessionStorageKey = "nexus-session-user";
-const cookieSessionMarker = "cookie-session";
 
 export interface SessionUser {
   id: string;
@@ -11,20 +13,23 @@ export interface SessionUser {
 }
 
 export interface SessionData {
-  accessToken: string;
   user: SessionUser;
 }
+
+export const DEMO_SESSION: SessionData = {
+  user: {
+    id: "demo-user",
+    email: DEMO_ADMIN_EMAIL,
+    name: "Rafael — Administrador",
+    roles: ["ADMIN"]
+  }
+};
 
 let currentSession: SessionData | null = null;
 
 async function parseError(response: Response, fallback: string) {
   const body = await response.json().catch(() => null);
   return typeof body?.message === "string" ? body.message : fallback;
-}
-
-function authHeaders(token?: string): Record<string, string> {
-  if (!token || token === cookieSessionMarker) return {};
-  return { Authorization: `Bearer ${token}` };
 }
 
 export async function apiGet<T>(path: string, fallback: T): Promise<T> {
@@ -54,14 +59,11 @@ export async function apiPost<T>(path: string, payload: unknown, fallback: T): P
   }
 }
 
-export async function apiPostClient<T>(path: string, payload: unknown, token?: string): Promise<T> {
+export async function apiPostClient<T>(path: string, payload: unknown): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, {
     method: "POST",
     credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-      ...authHeaders(token)
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload)
   });
 
@@ -73,11 +75,10 @@ export async function apiPostClient<T>(path: string, payload: unknown, token?: s
   return (await response.json()) as T;
 }
 
-export async function apiUploadClient<T>(path: string, formData: FormData, token?: string): Promise<T> {
+export async function apiUploadClient<T>(path: string, formData: FormData): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, {
     method: "POST",
     credentials: "include",
-    headers: authHeaders(token),
     body: formData
   });
 
@@ -89,10 +90,9 @@ export async function apiUploadClient<T>(path: string, formData: FormData, token
   return (await response.json()) as T;
 }
 
-export async function apiGetClient<T>(path: string, token?: string): Promise<T> {
+export async function apiGetClient<T>(path: string): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, {
-    credentials: "include",
-    headers: authHeaders(token)
+    credentials: "include"
   });
 
   if (!response.ok) {
@@ -103,14 +103,11 @@ export async function apiGetClient<T>(path: string, token?: string): Promise<T> 
   return (await response.json()) as T;
 }
 
-export async function apiPatchClient<T>(path: string, payload: unknown, token?: string): Promise<T> {
+export async function apiPatchClient<T>(path: string, payload: unknown): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, {
     method: "PATCH",
     credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-      ...authHeaders(token)
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload)
   });
 
@@ -122,11 +119,10 @@ export async function apiPatchClient<T>(path: string, payload: unknown, token?: 
   return (await response.json()) as T;
 }
 
-export async function apiDeleteClient<T>(path: string, token?: string): Promise<T> {
+export async function apiDeleteClient<T>(path: string): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, {
     method: "DELETE",
-    credentials: "include",
-    headers: authHeaders(token)
+    credentials: "include"
   });
 
   if (!response.ok) {
@@ -138,18 +134,27 @@ export async function apiDeleteClient<T>(path: string, token?: string): Promise<
 }
 
 export async function fetchCurrentSession() {
+  if (DEMO_MODE) {
+    const session = getSession();
+    if (!session) throw new Error("Sessao de preview nao encontrada.");
+    return session;
+  }
   const session = await apiGetClient<SessionData>("/auth/me");
   saveSession(session);
   return session;
 }
 
 export async function logoutSession() {
+  if (DEMO_MODE) {
+    clearSession();
+    return;
+  }
   await apiPostClient<{ ok: boolean }>("/auth/logout", {});
   clearSession();
 }
 
 export function saveSession(session: SessionData) {
-  currentSession = { accessToken: cookieSessionMarker, user: session.user };
+  currentSession = { user: session.user };
   if (typeof window === "undefined") return;
   window.sessionStorage.setItem(sessionStorageKey, JSON.stringify(session.user));
 }
@@ -161,7 +166,7 @@ export function getSession(): SessionData | null {
   if (!raw) return null;
   try {
     const user = JSON.parse(raw) as SessionUser;
-    currentSession = { accessToken: cookieSessionMarker, user };
+    currentSession = { user };
     return currentSession;
   } catch {
     window.sessionStorage.removeItem(sessionStorageKey);

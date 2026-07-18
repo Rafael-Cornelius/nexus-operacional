@@ -7,6 +7,7 @@ import { DataTable } from "@/components/tables/data-table";
 import { Button } from "@/components/ui/button";
 import { Card, StatCard } from "@/components/ui/card";
 import { apiGetClient, apiPostClient, getSession } from "@/services/api";
+import { formatKg, formatPercent } from "@/lib/format";
 
 interface WeekRow {
   id: string;
@@ -24,6 +25,8 @@ interface DowntimeEntryRow {
   date: string;
   stoppedMinutes: string | number;
   stoppedPercent: string | number;
+  realKgHour: string | number;
+  possibleKgHour: string | number;
   status: string;
   sector?: { code: string };
   reason?: { name: string };
@@ -48,19 +51,19 @@ export default function DowntimePage() {
   const [producedMassKg, setProducedMassKg] = useState(5000);
   const [message, setMessage] = useState("Carregando paradas da API.");
   const [loading, setLoading] = useState(false);
-  const token = useMemo(() => getSession()?.accessToken, []);
+  const session = useMemo(() => getSession(), []);
 
   async function loadData(nextWeekId = weekId) {
     const requestedWeek = nextWeekId || weekId;
-    if (!token) {
+    if (!session) {
       setEntries([]);
       return;
     }
     setLoading(true);
     try {
       const [weekRows, reasonRows] = await Promise.all([
-        apiGetClient<WeekRow[]>("/weeks", token),
-        apiGetClient<ReasonRow[]>("/downtime/reasons", token)
+        apiGetClient<WeekRow[]>("/weeks"),
+        apiGetClient<ReasonRow[]>("/downtime/reasons")
       ]);
       const selectedWeek = requestedWeek || weekRows.find((week) => week.status !== "CLOSED" && week.status !== "ARCHIVED")?.id || weekRows[0]?.id || "";
       setWeeks(weekRows);
@@ -68,7 +71,7 @@ export default function DowntimePage() {
       setWeekId(selectedWeek);
       setReasonId((current) => current || reasonRows[0]?.id || "");
       if (selectedWeek) {
-        const rows = await apiGetClient<DowntimeEntryRow[]>(`/downtime?weekId=${selectedWeek}`, token);
+        const rows = await apiGetClient<DowntimeEntryRow[]>(`/downtime?weekId=${selectedWeek}`);
         setEntries(rows);
       }
       setMessage("Paradas carregadas da API.");
@@ -87,7 +90,7 @@ export default function DowntimePage() {
   }, []);
 
   async function saveDowntime() {
-    if (!token || !weekId || !reasonId) {
+    if (!session || !weekId || !reasonId) {
       setMessage("Entre no sistema e selecione semana/motivo para salvar.");
       return;
     }
@@ -106,8 +109,7 @@ export default function DowntimePage() {
           producedMassKg,
           downtimeReasonId: reasonId,
           notes: "Parada registrada pela tela operacional."
-        },
-        token
+        }
       );
       await loadData(weekId);
       setMessage("Parada registrada e classificada pelo backend.");
@@ -119,15 +121,20 @@ export default function DowntimePage() {
   }
 
   const stoppedTotal = entries.reduce((sum, entry) => sum + Number(entry.stoppedMinutes), 0);
+  const averageRealKgHour = entries.length ? entries.reduce((sum, entry) => sum + Number(entry.realKgHour), 0) / entries.length : 0;
+  const averagePingandoKgHour = entries.length ? entries.reduce((sum, entry) => sum + Number(entry.possibleKgHour), 0) / entries.length : 0;
   const rows = entries.length
     ? entries.map((entry) => ({
         Data: entry.date.slice(0, 10),
         Setor: entry.sector?.code ?? "-",
         Motivo: entry.reason?.name ?? "-",
         Tempo: `${Number(entry.stoppedMinutes).toLocaleString("pt-BR")} min`,
+        "% parada": formatPercent(Number(entry.stoppedPercent)),
+        "kg/h real": formatKg(Number(entry.realKgHour)),
+        "kg/h pingando": formatKg(Number(entry.possibleKgHour)),
         Status: entry.status
       }))
-    : [{ Data: "-", Setor: "-", Motivo: "Nenhuma parada carregada.", Tempo: "-", Status: "-" }];
+    : [{ Data: "-", Setor: "-", Motivo: "Nenhuma parada carregada.", Tempo: "-", "% parada": "-", "kg/h real": "-", "kg/h pingando": "-", Status: "-" }];
 
   return (
     <div className="space-y-6">
@@ -156,9 +163,11 @@ export default function DowntimePage() {
         </div>
         <p className="mt-4 text-sm text-slate-300">{message}</p>
       </Card>
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid gap-4 md:grid-cols-4">
         <StatCard label="Tempo parado" value={`${stoppedTotal.toLocaleString("pt-BR")} min`} status={stoppedTotal > 120 ? "MEDIUM" : "OK"} />
         <StatCard label="Registros" value={String(entries.length)} />
+        <StatCard label="kg/h real médio" value={formatKg(averageRealKgHour)} />
+        <StatCard label="kg/h pingando médio" value={formatKg(averagePingandoKgHour)} />
         <StatCard label="Status operacional" value={stoppedTotal > 120 ? "Atencao" : "OK"} status={stoppedTotal > 120 ? "ATTENTION" : "OK"} />
       </div>
       <DataTable title="Paradas" rows={rows} />

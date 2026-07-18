@@ -6,12 +6,25 @@ import { useEffect, useState } from "react";
 import { Factory, LogOut, Search, UserCircle2 } from "lucide-react";
 import { navigation, NavigationRole } from "@/lib/navigation";
 import { cn } from "@/lib/format";
-import { fetchCurrentSession, getSession, logoutSession, SessionUser } from "@/services/api";
+import { DEMO_MODE, fetchCurrentSession, getSession, logoutSession, SessionUser } from "@/services/api";
+
+const basePath = "/nexus-operacional";
+
+function getAppPathname(pathname: string) {
+  const withoutBasePath = pathname === basePath
+    ? "/"
+    : pathname.startsWith(`${basePath}/`)
+      ? pathname.slice(basePath.length)
+      : pathname;
+
+  return withoutBasePath.length > 1 ? withoutBasePath.replace(/\/+$/, "") : withoutBasePath;
+}
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const isLogin = pathname === "/login";
+  const appPathname = getAppPathname(pathname);
+  const isLogin = appPathname === "/login";
   const [user, setUser] = useState<SessionUser | null>(null);
   const [checkingSession, setCheckingSession] = useState(!isLogin);
   const visibleNavigation = navigation.filter((item) => user?.roles.some((role) => item.roles.includes(role as NavigationRole)));
@@ -34,7 +47,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       } catch {
         if (!active) return;
         setUser(null);
-        router.replace(`/login?next=${encodeURIComponent(pathname)}`);
+        router.replace(`/login?next=${encodeURIComponent(appPathname)}`);
       } finally {
         if (active) setCheckingSession(false);
       }
@@ -46,7 +59,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     return () => {
       active = false;
     };
-  }, [isLogin, pathname, router]);
+  }, [appPathname, isLogin, router]);
 
   async function logout() {
     await logoutSession().catch(() => undefined);
@@ -86,7 +99,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <nav className="nexus-scrollbar flex max-h-[calc(100vh-120px)] flex-col gap-1 overflow-y-auto pr-1">
           {visibleNavigation.map((item) => {
             const Icon = item.icon;
-            const active = pathname === item.href;
+            const active = appPathname === item.href;
             return (
               <Link
                 key={item.href}
@@ -110,7 +123,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <div className="flex items-center justify-between gap-4">
             <div>
               <p className="text-xs uppercase text-cyan-200/80">Centro de comando industrial</p>
-              <h1 className="text-lg font-semibold">NEXUS OPERACIONAL</h1>
+              <div className="flex items-center gap-3">
+                <h1 className="text-lg font-semibold">NEXUS OPERACIONAL</h1>
+                {DEMO_MODE ? <span className="rounded-full border border-emerald-300/30 bg-emerald-300/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-200">Preview ao vivo</span> : null}
+              </div>
             </div>
             <div className="hidden min-w-80 items-center gap-2 rounded-md border border-[var(--line)] bg-white/5 px-3 py-2 text-sm text-slate-400 md:flex">
               <Search className="size-4" />

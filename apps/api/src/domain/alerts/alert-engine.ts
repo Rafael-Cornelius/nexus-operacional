@@ -6,6 +6,27 @@ export interface AlertRuleInput {
   target: number;
 }
 
+export interface OperationalAlert extends AlertRuleInput {
+  status: AlertStatus;
+  action: string;
+}
+
+export function recommendedAction(metric: AlertRuleInput["metric"], status: AlertStatus): string {
+  if (status === "OK") return "Manter o processo e acompanhar o indicador.";
+  const actions: Record<AlertRuleInput["metric"], string> = {
+    overweight: "Ajustar dosagem, conferir a pesagem e validar a média de amostras.",
+    loss: "Investigar a causa, registrar a ação corretiva e revisar o processo.",
+    yield: "Revisar receita, rendimento da massa e perdas de pesagem.",
+    downtime: "Acionar a área responsável e eliminar a causa recorrente da parada."
+  };
+  return actions[metric];
+}
+
+export function evaluateRule(input: AlertRuleInput): OperationalAlert {
+  const status = classifyRule(input);
+  return { ...input, status, action: recommendedAction(input.metric, status) };
+}
+
 export function classifyRule(input: AlertRuleInput): AlertStatus {
   const { metric, value, target } = input;
 

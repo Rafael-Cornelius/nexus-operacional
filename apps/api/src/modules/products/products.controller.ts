@@ -26,6 +26,18 @@ export class ProductsController {
     return this.products.update(id, body, user);
   }
 
+  @Roles("ADMIN", "MANAGER", "SUPERVISOR", "VIEWER")
+  @Get(":id/prices")
+  pricePeriods(@Param("id") id: string) {
+    return this.products.pricePeriods(id);
+  }
+
+  @Roles("ADMIN", "MANAGER", "SUPERVISOR")
+  @Post(":id/prices")
+  addPricePeriod(@Param("id") id: string, @Body() body: unknown, @CurrentUserData() user?: CurrentUser) {
+    return this.products.addPricePeriod(id, body, user);
+  }
+
   @Roles("ADMIN")
   @Delete(":id")
   deactivate(@Param("id") id: string, @CurrentUserData() user?: CurrentUser) {

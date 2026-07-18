@@ -6,7 +6,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { DataTable } from "@/components/tables/data-table";
 import { Button } from "@/components/ui/button";
 import { Card, StatCard } from "@/components/ui/card";
-import { formatKg } from "@/lib/format";
+import { formatCurrency, formatKg } from "@/lib/format";
 import { apiGetClient, apiPostClient, getSession } from "@/services/api";
 
 interface WeekRow {
@@ -27,41 +27,52 @@ interface LossEntryRow {
   reason?: string | null;
   sector?: { code: string } | null;
   lossType?: { name: string };
+  product?: { code: string; name: string } | null;
+  lossCost?: string | number;
+  filmUsedKg?: string | number;
+  financialResult?: string | number;
 }
+
+interface ProductRow { id: string; code: string; name: string; defaultSector?: { code: string } }
 
 export default function LossesPage() {
   const [weeks, setWeeks] = useState<WeekRow[]>([]);
   const [types, setTypes] = useState<LossTypeRow[]>([]);
   const [entries, setEntries] = useState<LossEntryRow[]>([]);
+  const [products, setProducts] = useState<ProductRow[]>([]);
   const [weekId, setWeekId] = useState("");
   const [lossTypeId, setLossTypeId] = useState("");
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [sector, setSector] = useState<"P1" | "P2">("P1");
   const [quantityKg, setQuantityKg] = useState(10);
+  const [productId, setProductId] = useState("");
+  const [packedBoxes, setPackedBoxes] = useState(0);
   const [reason, setReason] = useState("Lancamento operacional");
   const [message, setMessage] = useState("Carregando perdas da API.");
   const [loading, setLoading] = useState(false);
-  const token = useMemo(() => getSession()?.accessToken, []);
+  const session = useMemo(() => getSession(), []);
 
   async function loadData(nextWeekId = weekId) {
     const requestedWeek = nextWeekId || weekId;
-    if (!token) {
+    if (!session) {
       setEntries([]);
       return;
     }
     setLoading(true);
     try {
-      const [weekRows, typeRows] = await Promise.all([
-        apiGetClient<WeekRow[]>("/weeks", token),
-        apiGetClient<LossTypeRow[]>("/losses/types", token)
+      const [weekRows, typeRows, productRows] = await Promise.all([
+        apiGetClient<WeekRow[]>("/weeks"),
+        apiGetClient<LossTypeRow[]>("/losses/types"),
+        apiGetClient<ProductRow[]>("/products?active=true")
       ]);
       const selectedWeek = requestedWeek || weekRows.find((week) => week.status !== "CLOSED" && week.status !== "ARCHIVED")?.id || weekRows[0]?.id || "";
       setWeeks(weekRows);
       setTypes(typeRows);
+      setProducts(productRows);
       setWeekId(selectedWeek);
       setLossTypeId((current) => current || typeRows[0]?.id || "");
       if (selectedWeek) {
-        const lossRows = await apiGetClient<LossEntryRow[]>(`/losses?weekId=${selectedWeek}`, token);
+        const lossRows = await apiGetClient<LossEntryRow[]>(`/losses?weekId=${selectedWeek}`);
         setEntries(lossRows);
       }
       setMessage("Perdas carregadas da API.");
@@ -80,13 +91,13 @@ export default function LossesPage() {
   }, []);
 
   async function saveLoss() {
-    if (!token || !weekId || !lossTypeId) {
+    if (!session || !weekId || !lossTypeId) {
       setMessage("Entre no sistema e selecione semana/tipo para salvar.");
       return;
     }
     setLoading(true);
     try {
-      await apiPostClient("/losses", { weekId, date, sector, lossTypeId, quantityKg, reason }, token);
+      await apiPostClient("/losses", { weekId, date, sector, productId: productId || undefined, lossTypeId, quantityKg, packedBoxes, reason });
       await loadData(weekId);
       setMessage("Perda registrada e auditada.");
     } catch (error) {
@@ -102,24 +113,30 @@ export default function LossesPage() {
         Data: entry.date.slice(0, 10),
         Setor: entry.sector?.code ?? "-",
         Tipo: entry.lossType?.name ?? "-",
+        Produto: entry.product ? `${entry.product.code} - ${entry.product.name}` : "-",
         Quantidade: formatKg(Number(entry.quantityKg)),
+        Custo: formatCurrency(Number(entry.lossCost ?? 0)),
+        "Filme aproveitado": formatKg(Number(entry.filmUsedKg ?? 0)),
+        Resultado: formatCurrency(Number(entry.financialResult ?? 0)),
         Motivo: entry.reason ?? "-"
       }))
-    : [{ Data: "-", Setor: "-", Tipo: "Nenhuma perda carregada.", Quantidade: "-", Motivo: "-" }];
+    : [{ Data: "-", Setor: "-", Tipo: "Nenhuma perda carregada.", Produto: "-", Quantidade: "-", Custo: "-", "Filme aproveitado": "-", Resultado: "-", Motivo: "-" }];
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Controle de perdas" description="Registre perdas por embalagem, caixa, organico, maquina, pesagem, sobrepeso e outros." />
+      <PageHeader title="Controle de perdas" description="Registre perdas e calcule custo, filme aproveitado e resultado financeiro da embalagem." />
       <Card>
         <div className="grid gap-4 md:grid-cols-5">
           <Select label="Semana" value={weekId} onChange={setWeekId} options={weeks.map((week) => ({ value: week.id, label: `${week.label} - ${week.status}` }))} />
           <Select label="Tipo" value={lossTypeId} onChange={setLossTypeId} options={types.map((type) => ({ value: type.id, label: type.name }))} />
           <Select label="Setor" value={sector} onChange={(value) => setSector(value as "P1" | "P2")} options={[{ value: "P1", label: "P1" }, { value: "P2", label: "P2" }]} />
+          <Select label="Produto (para custo)" value={productId} onChange={setProductId} options={[{ value: "", label: "Não informado" }, ...products.filter((product) => !product.defaultSector || product.defaultSector.code === sector).map((product) => ({ value: product.id, label: `${product.code} - ${product.name}` }))]} />
           <Input label="Data" type="date" value={date} onChange={setDate} />
           <NumberInput label="Kg" value={quantityKg} onChange={setQuantityKg} />
         </div>
         <div className="mt-4 flex flex-wrap gap-3">
           <Input label="Motivo" value={reason} onChange={setReason} />
+          <NumberInput label="Caixas produzidas (filme)" value={packedBoxes} onChange={setPackedBoxes} />
           <Button type="button" onClick={saveLoss} disabled={loading}>
             <Save className="size-4" />
             Salvar perda

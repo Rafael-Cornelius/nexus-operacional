@@ -13,4 +13,9 @@ export class ReportsController {
   weeklyProduction(@Query("weekId") weekId: string | undefined, @CurrentUserData() user?: CurrentUser) {
     return this.reports.weeklyProduction(weekId, user);
   }
+
+  @Get("weekly-summary")
+  weeklySummary(@Query("weekId") weekId: string | undefined, @CurrentUserData() user?: CurrentUser) {
+    return this.reports.weeklySummary(weekId, user);
+  }
 }

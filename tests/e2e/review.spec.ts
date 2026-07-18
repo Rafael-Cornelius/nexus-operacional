@@ -1,4 +1,4 @@
-import { test } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 
 test.setTimeout(90_000);
 
@@ -18,13 +18,13 @@ const reviewRoutes = [
   { slug: "backups", path: "/backups" }
 ];
 
-function withBasePath(path: string) {
-  return path === "/" ? "/nexus-operacional/" : `/nexus-operacional${path}`;
-}
-
 for (const route of reviewRoutes) {
   test(`review screenshot ${route.slug}`, async ({ page }, testInfo) => {
-    await page.goto(withBasePath(route.path), { waitUntil: "domcontentloaded", timeout: 90_000 });
+    await page.goto("/login", { timeout: 90_000 });
+    await page.getByRole("button", { name: "Entrar" }).click();
+    await expect(page.getByRole("heading", { name: "Dashboard geral" })).toBeVisible();
+    await page.goto(route.path, { timeout: 90_000 });
+    await expect(page.locator("main").getByRole("heading").first()).toBeVisible();
     await page.waitForFunction(() => {
       const color = window.getComputedStyle(document.body).backgroundColor;
       return document.styleSheets.length > 0 && color !== "rgba(0, 0, 0, 0)";
