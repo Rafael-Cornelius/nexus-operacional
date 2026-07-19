@@ -4,9 +4,8 @@ import { Throttle } from "@nestjs/throttler";
 import { CurrentUser } from "../../infrastructure/security/current-user";
 import { CurrentUserData } from "../auth/current-user.decorator";
 import { Roles } from "../auth/roles.decorator";
+import { importUploadLimitBytes } from "./import-security.config";
 import { ImportService, UploadedWorkbookFile } from "./import.service";
-
-const importUploadLimitBytes = Number(process.env.IMPORT_MAX_UPLOAD_BYTES ?? 25 * 1024 * 1024);
 
 @Roles("ADMIN", "SUPERVISOR")
 @Controller("import")

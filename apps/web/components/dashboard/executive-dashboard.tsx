@@ -11,6 +11,8 @@ import {
   demoDashboardKpis
 } from "@/lib/demo/operational-preview";
 import { formatCurrency, formatKg, formatPercent } from "@/lib/format";
+import { goalVisualState, type OperationalGoalAlert } from "@/lib/operational-goals";
+import { resolveExplicitWeekId } from "@/lib/week-selection";
 import { apiGetClient, DEMO_MODE, getSession } from "@/services/api";
 
 interface DashboardKpis {
@@ -47,12 +49,10 @@ interface Comparison {
   metrics: Array<{ label: string; key: string; currentValue: number; previousValue: number; variationPercent: number | null; trend: "up" | "down" | "stable"; improvesWhen: "up" | "down" }>;
 }
 
-interface Alert {
+interface Alert extends OperationalGoalAlert {
   goalId: string;
   name: string;
   value: number;
-  target: number;
-  status: string;
   action: string;
 }
 
@@ -92,18 +92,23 @@ export function ExecutiveDashboard() {
     async function loadDashboard() {
       try {
         const weekRows = await apiGetClient<WeekRow[]>("/weeks");
-        const weekId = selectedWeekId || weekRows[0]?.id || "";
+        const weekId = resolveExplicitWeekId(weekRows, selectedWeekId);
         if (cancelled) return;
         setWeeks(weekRows);
         if (!weekId) {
+          if (selectedWeekId) setSelectedWeekId("");
           setKpis(null);
           setCharts(null);
           setComparison(null);
           setAlerts([]);
-          setSource("Nenhuma semana operacional cadastrada.");
+          setSource(weekRows.length ? "Selecione uma semana para carregar os dados operacionais." : "Nenhuma semana operacional cadastrada.");
           return;
         }
-        if (!selectedWeekId) setSelectedWeekId(weekId);
+        setKpis(null);
+        setCharts(null);
+        setComparison(null);
+        setAlerts([]);
+        setSource("Carregando a semana selecionada.");
         const query = `?weekId=${encodeURIComponent(weekId)}`;
         const [nextKpis, nextCharts, nextComparison, nextAlerts] = await Promise.all([
           apiGetClient<DashboardKpis>(`/dashboard/kpis${query}`),
@@ -119,7 +124,13 @@ export function ExecutiveDashboard() {
         const selectedWeek = weekRows.find((week) => week.id === weekId);
         setSource(`Dados reais da API — ${selectedWeek?.label ?? "semana selecionada"} (${selectedWeek?.status ?? "status indisponível"}).`);
       } catch (error) {
-        if (!cancelled) setSource(error instanceof Error ? error.message : "Não foi possível carregar o dashboard.");
+        if (!cancelled) {
+          setKpis(null);
+          setCharts(null);
+          setComparison(null);
+          setAlerts([]);
+          setSource(error instanceof Error ? error.message : "Não foi possível carregar o dashboard.");
+        }
       }
     }
 
@@ -129,13 +140,18 @@ export function ExecutiveDashboard() {
     };
   }, [selectedWeekId]);
 
+  const productionGoal = goalVisualState(alerts, ["produced_kg"], formatKg);
+  const lossesGoal = goalVisualState(alerts, ["losses_kg", "loss"], formatKg);
+  const overweightGoal = goalVisualState(alerts, ["overweight"], formatPercent);
+  const yieldGoal = goalVisualState(alerts, ["yield"], formatPercent);
+  const noConfiguredGoal = goalVisualState(alerts, [], (target) => String(target));
   const dashboardKpis = kpis ? [
-    { label: "Produção total", value: formatKg(kpis.productionTotalKg), status: "OK" },
-    { label: "Perdas totais", value: formatKg(kpis.lossesTotalKg), status: kpis.lossesTotalKg > 50 ? "ATTENTION" : "OK" },
-    { label: "Sobrepeso", value: formatKg(kpis.overweightTotalKg), status: kpis.overweightPercent > 0.02 ? "ATTENTION" : "OK" },
-    { label: "Rendimento", value: formatPercent(kpis.averageYield), status: kpis.averageYield < 0.95 ? "ATTENTION" : "OK" },
-    { label: "kg/h real", value: formatKg(kpis.averageRealKgHour), status: "OK" },
-    { label: "kg/h pingando", value: formatKg(kpis.averagePingandoKgHour), status: "OK" }
+    { label: "Produção total", value: formatKg(kpis.productionTotalKg), ...productionGoal },
+    { label: "Perdas totais", value: formatKg(kpis.lossesTotalKg), ...lossesGoal },
+    { label: "Sobrepeso percentual", value: formatPercent(kpis.overweightPercent), ...overweightGoal },
+    { label: "Rendimento", value: formatPercent(kpis.averageYield), ...yieldGoal },
+    { label: "kg/h real", value: formatKg(kpis.averageRealKgHour), ...noConfiguredGoal },
+    { label: "kg/h pingando", value: formatKg(kpis.averagePingandoKgHour), ...noConfiguredGoal }
   ] : [];
   const sectors = charts?.productionBySector ?? [];
   const reasons = charts?.downtimeByReason ?? [];
@@ -149,6 +165,7 @@ export function ExecutiveDashboard() {
           <label className="flex items-center gap-2">
             <span>Semana</span>
             <select className="rounded-md border border-[var(--line)] bg-[#111827] px-3 py-2 text-slate-100" value={selectedWeekId} onChange={(event) => setSelectedWeekId(event.target.value)}>
+              <option value="">Selecione uma semana</option>
               {weeks.map((week) => <option key={week.id} value={week.id}>{week.label} — {week.status}</option>)}
             </select>
           </label>
@@ -156,14 +173,14 @@ export function ExecutiveDashboard() {
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
-        {dashboardKpis.map((kpi) => <StatCard key={kpi.label} label={kpi.label} value={kpi.value} status={kpi.status} />)}
+        {dashboardKpis.map((kpi) => <StatCard key={kpi.label} label={kpi.label} value={kpi.value} hint={kpi.hint} status={kpi.status} />)}
       </div>
 
       {kpis ? <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard label="Custo de produção" value={formatCurrency(kpis.financial.productionCost)} status="OK" />
-        <StatCard label="Custo das perdas" value={formatCurrency(kpis.financial.lossesCost)} status={kpis.financial.lossesCost > 0 ? "ATTENTION" : "OK"} />
-        <StatCard label="Custo do sobrepeso" value={formatCurrency(kpis.financial.overweightCost)} status={kpis.financial.overweightCost > 0 ? "MEDIUM" : "OK"} />
-        <StatCard label="Resultado do filme" value={formatCurrency(kpis.financial.packaging.financialResult)} status={kpis.financial.packaging.financialResult < 0 ? "ATTENTION" : "OK"} />
+        <StatCard label="Custo de produção" value={formatCurrency(kpis.financial.productionCost)} />
+        <StatCard label="Custo das perdas" value={formatCurrency(kpis.financial.lossesCost)} />
+        <StatCard label="Custo do sobrepeso" value={formatCurrency(kpis.financial.overweightCost)} />
+        <StatCard label="Resultado do filme" value={formatCurrency(kpis.financial.packaging.financialResult)} />
       </div> : null}
 
       <div className="grid gap-4 xl:grid-cols-2">
@@ -190,7 +207,7 @@ export function ExecutiveDashboard() {
       <DataTable title="Alertas e ações recomendadas" rows={alerts.map((alert) => ({
         Meta: alert.name,
         Atual: alert.value.toLocaleString("pt-BR", { maximumFractionDigits: 3 }),
-        Alvo: alert.target.toLocaleString("pt-BR", { maximumFractionDigits: 3 }),
+        Alvo: `${alert.comparator || "alvo"} ${alert.target.toLocaleString("pt-BR", { maximumFractionDigits: 3 })}`,
         Status: alert.status,
         "Ação recomendada": alert.action
       }))} />

@@ -2,6 +2,19 @@ name: Deploy demo frontend to GitHub Pages
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+      - agent/corrige-auditoria-operacional
+    paths:
+      - "apps/web/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/pages.yml"
+
+concurrency:
+  group: nexus-demo-pages
+  cancel-in-progress: true
 
 jobs:
   pages:
@@ -22,7 +35,7 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Generate Prisma client
         run: npm run prisma:generate
@@ -43,6 +56,8 @@ jobs:
         run: npm run build
         env:
           NEXT_PUBLIC_DEMO_MODE: "true"
+          NEXT_PUBLIC_DEMO_ADMIN_EMAIL: "admin@demo.nexus.local"
+          NEXT_PUBLIC_DEMO_ADMIN_PASSWORD: "NexusDemo@2026"
           NEXUS_STATIC_DEMO: "true"
 
       - name: Add Pages nojekyll marker

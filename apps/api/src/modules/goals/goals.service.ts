@@ -1,6 +1,12 @@
 import { Injectable } from "@nestjs/common";
+import type { Goal } from "@prisma/client";
 import { z } from "zod";
-import { recommendedAction } from "../../domain/alerts/alert-engine";
+import {
+  evaluateOperationalGoal,
+  type CanonicalGoalMetric,
+  type GoalComparator,
+  normalizeGoalMetric
+} from "../../domain/goals/goal-evaluation";
 import { PrismaService } from "../../infrastructure/database/prisma.service";
 import { CurrentUser } from "../../infrastructure/security/current-user";
 import { AuditService } from "../audit/audit.service";
@@ -22,21 +28,6 @@ function n(value: unknown): number {
   return Number(value ?? 0);
 }
 
-function satisfies(value: number, target: number, comparator: string) {
-  if (comparator === ">=") return value >= target;
-  if (comparator === "<") return value < target;
-  if (comparator === ">") return value > target;
-  if (comparator === "=") return value === target;
-  return value <= target;
-}
-
-function progress(value: number, target: number, comparator: string) {
-  if (target === 0) return value === 0 ? 1 : 0;
-  if (comparator === ">=" || comparator === ">") return Math.min(Math.max(value / target, 0), 1);
-  if (comparator === "=") return value === target ? 1 : Math.max(0, 1 - Math.abs(value - target) / target);
-  return value <= target ? 1 : Math.max(0, Math.min(target / value, 1));
-}
-
 @Injectable()
 export class GoalsService {
   constructor(
@@ -46,24 +37,15 @@ export class GoalsService {
 
   async list(weekId?: string) {
     const goals = await this.prisma.goal.findMany({ where: { deletedAt: null }, orderBy: { metric: "asc" } });
-    const scoped = await Promise.all(goals.map(async (goal) => ({
-      ...goal,
-      currentValue: await this.metricValue(goal.metric, weekId, goal.sectorCode ?? undefined)
-    })));
-    return scoped.map((goal) => {
-      const currentValue = goal.currentValue;
-      const targetValue = n(goal.targetValue);
-      const achieved = satisfies(currentValue, targetValue, goal.comparator);
-      const metric = goal.metric === "yield" ? "yield" : goal.metric === "overweight" ? "overweight" : goal.metric === "downtime_minutes" ? "downtime" : "loss";
-      return {
-        ...goal,
-        targetValue,
-        currentValue,
-        progress: progress(currentValue, targetValue, goal.comparator),
-        status: achieved ? "OK" : "ATTENTION",
-        action: recommendedAction(metric, achieved ? "OK" : "ATTENTION")
-      };
+    return Promise.all(goals.map((goal) => this.evaluate(goal, weekId)));
+  }
+
+  async activeAlerts(weekId?: string) {
+    const goals = await this.prisma.goal.findMany({
+      where: { deletedAt: null, active: true },
+      orderBy: [{ metric: "asc" }, { sectorCode: "asc" }, { name: "asc" }]
     });
+    return Promise.all(goals.map((goal) => this.evaluate(goal, weekId)));
   }
 
   async create(payload: unknown, user?: CurrentUser) {
@@ -79,11 +61,48 @@ export class GoalsService {
     return goal;
   }
 
-  private async metricValue(metric: string, weekId?: string, sectorCode?: "P1" | "P2") {
-    const productionWhere = { deletedAt: null, weekId, sector: sectorCode ? { code: sectorCode } : undefined };
+  private async evaluate(goal: Goal, weekId?: string) {
+    const metric = normalizeGoalMetric(goal.metric);
+    const targetValue = n(goal.targetValue);
+    if (!metric) {
+      return {
+        ...goal,
+        goalId: goal.id,
+        targetValue,
+        target: targetValue,
+        value: 0,
+        currentValue: 0,
+        progress: 0,
+        achieved: false,
+        status: "CRITICAL" as const,
+        action: `Metrica nao suportada: ${goal.metric}. Normalize o cadastro antes de usar este indicador.`
+      };
+    }
+
+    const currentValue = await this.metricValue(metric, weekId, goal.sectorCode ?? undefined);
+    const evaluation = evaluateOperationalGoal({
+      metric,
+      value: currentValue,
+      target: targetValue,
+      comparator: goal.comparator as GoalComparator
+    });
+    return {
+      ...goal,
+      goalId: goal.id,
+      metric,
+      targetValue,
+      target: targetValue,
+      value: currentValue,
+      currentValue,
+      ...evaluation
+    };
+  }
+
+  private async metricValue(metric: CanonicalGoalMetric, weekId?: string, sectorCode?: "P1" | "P2") {
+    const productionWhere = { deletedAt: null, workflowStatus: "APPROVED" as const, weekId, sector: sectorCode ? { code: sectorCode } : undefined };
     if (metric === "downtime_minutes") {
       const result = await this.prisma.downtimeEntry.aggregate({
-        where: { deletedAt: null, weekId, sector: sectorCode ? { code: sectorCode } : undefined },
+        where: { deletedAt: null, workflowStatus: "APPROVED", weekId, sector: sectorCode ? { code: sectorCode } : undefined },
         _sum: { stoppedMinutes: true }
       });
       return n(result._sum.stoppedMinutes);
@@ -96,7 +115,7 @@ export class GoalsService {
     if (metric === "produced_kg") return n(result._sum.producedKg);
     if (metric === "losses_kg") {
       const losses = await this.prisma.lossEntry.aggregate({
-        where: { deletedAt: null, weekId, sector: sectorCode ? { code: sectorCode } : undefined },
+        where: { deletedAt: null, workflowStatus: "APPROVED", weekId, sector: sectorCode ? { code: sectorCode } : undefined },
         _sum: { quantityKg: true }
       });
       return n(result._sum.weighingLossKg) + n(losses._sum.quantityKg);

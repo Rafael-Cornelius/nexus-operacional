@@ -8,9 +8,23 @@ FROM node:22-alpine AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+ARG API_INTERNAL_URL=http://api:3333
+ARG NEXT_PUBLIC_API_URL=/api
+ENV API_INTERNAL_URL=${API_INTERNAL_URL}
+ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+ENV NEXUS_STATIC_DEMO=false
+ENV NEXT_PUBLIC_DEMO_MODE=false
 RUN npm run build --workspace=@nexus/web
 
-FROM nginx:1.27-alpine AS runner
-COPY apps/web/nginx.conf /etc/nginx/conf.d/default.conf
-COPY --from=builder /app/apps/web/out /usr/share/nginx/html/nexus-operacional
+FROM node:22-alpine AS runner
+WORKDIR /app
+ENV NODE_ENV=production
+ENV PORT=3000
+ENV HOSTNAME=0.0.0.0
+RUN addgroup --system --gid 1001 nodejs && adduser --system --uid 1001 nextjs
+COPY --from=builder --chown=nextjs:nodejs /app/apps/web/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/apps/web/.next/static ./apps/web/.next/static
+COPY --from=builder --chown=nextjs:nodejs /app/apps/web/public ./apps/web/public
+USER nextjs
 EXPOSE 3000
+CMD ["node", "apps/web/server.js"]

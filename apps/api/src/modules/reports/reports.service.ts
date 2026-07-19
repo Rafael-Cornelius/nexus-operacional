@@ -6,6 +6,13 @@ import { DashboardService } from "../dashboard/dashboard.service";
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+export function csvCell(value: unknown) {
+  let text = value === null || value === undefined ? "" : String(value);
+  // Planilhas executam celulas iniciadas por estes caracteres como formula.
+  if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
 @Injectable()
 export class ReportsService {
   constructor(
@@ -16,12 +23,12 @@ export class ReportsService {
 
   async weeklyProduction(weekId?: string, user?: CurrentUser) {
     const entries = await this.prisma.productionEntry.findMany({
-      where: { deletedAt: null, weekId },
+      where: { deletedAt: null, workflowStatus: "APPROVED", weekId },
       include: { product: true, sector: true, week: true },
       orderBy: [{ date: "asc" }, { sector: { code: "asc" } }]
     });
-    const csv = [
-      "data,setor,produto,op,produzido_kg,perdas_kg,sobrepeso_kg,rendimento",
+    const csv = `\uFEFF${[
+      ["data", "setor", "produto", "op", "produzido_kg", "perdas_kg", "sobrepeso_kg", "rendimento"].map(csvCell).join(","),
       ...entries.map((entry) =>
         [
           entry.date.toISOString().slice(0, 10),
@@ -32,9 +39,9 @@ export class ReportsService {
           entry.weighingLossKg,
           entry.overweightTotalKg,
           entry.realYieldPercent
-        ].join(",")
+        ].map(csvCell).join(",")
       )
-    ].join("\n");
+    ].join("\r\n")}`;
 
     const exportRow = await this.prisma.reportExport.create({
       data: { type: "weekly-production-csv", filters: { weekId }, status: "GENERATED", createdBy: this.safeUserId(user) }
@@ -62,7 +69,7 @@ export class ReportsService {
       this.dashboard.alerts(week.id),
       this.prisma.productionEntry.groupBy({
         by: ["date"],
-        where: { deletedAt: null, weekId: week.id },
+        where: { deletedAt: null, workflowStatus: "APPROVED", weekId: week.id },
         _sum: { producedKg: true, weighingLossKg: true, overweightTotalKg: true },
         _avg: { realYieldPercent: true }
       })

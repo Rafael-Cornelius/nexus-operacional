@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Query } from "@nestjs/common";
+import { Controller, Get, Param, Post, Query } from "@nestjs/common";
 import { CurrentUser } from "../../infrastructure/security/current-user";
 import { CurrentUserData } from "../auth/current-user.decorator";
 import { Roles } from "../auth/roles.decorator";
@@ -17,5 +17,16 @@ export class BackupsController {
   @Post()
   create(@CurrentUserData() user?: CurrentUser) {
     return this.backups.create(user);
+  }
+
+  @Get(":id/verify")
+  verify(@Param("id") id: string, @CurrentUserData() user?: CurrentUser) {
+    return this.backups.verify(id, user);
+  }
+
+  @Roles("ADMIN")
+  @Post(":id/restore-rehearsal")
+  rehearseRestore(@Param("id") id: string, @CurrentUserData() user?: CurrentUser) {
+    return this.backups.rehearseRestore(id, user);
   }
 }

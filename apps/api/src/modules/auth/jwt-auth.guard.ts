@@ -1,13 +1,13 @@
 import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
 import { JwtService } from "@nestjs/jwt";
+import { PrismaService } from "../../infrastructure/database/prisma.service";
 import { CurrentUser } from "../../infrastructure/security/current-user";
 import { IS_PUBLIC_KEY } from "./public.decorator";
 
 interface JwtClaims {
   sub?: string;
-  email?: string;
-  roles?: string[];
+  sv?: number;
 }
 
 interface HttpRequestWithUser {
@@ -20,7 +20,8 @@ interface HttpRequestWithUser {
 export class JwtAuthGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
-    private readonly jwt: JwtService
+    private readonly jwt: JwtService,
+    private readonly prisma: PrismaService
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -36,21 +37,43 @@ export class JwtAuthGuard implements CanActivate {
       throw new UnauthorizedException("Sessao ausente ou expirada.");
     }
 
+    let payload: JwtClaims;
     try {
-      const payload = await this.jwt.verifyAsync<JwtClaims>(token);
-      if (!payload.sub || !payload.email) {
-        throw new UnauthorizedException("Sessao invalida.");
-      }
-
-      request.user = {
-        id: payload.sub,
-        email: payload.email,
-        roles: payload.roles ?? []
-      };
-      return true;
+      payload = await this.jwt.verifyAsync<JwtClaims>(token);
     } catch {
       throw new UnauthorizedException("Sessao invalida ou expirada.");
     }
+
+    if (!payload.sub || !Number.isSafeInteger(payload.sv) || (payload.sv ?? 0) < 1) {
+      throw new UnauthorizedException("Sessao invalida ou expirada.");
+    }
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: payload.sub },
+      select: {
+        id: true,
+        email: true,
+        active: true,
+        deletedAt: true,
+        sessionVersion: true,
+        roles: {
+          select: {
+            role: { select: { code: true } }
+          }
+        }
+      }
+    });
+
+    if (!user || !user.active || user.deletedAt || user.sessionVersion !== payload.sv) {
+      throw new UnauthorizedException("Sessao invalida ou expirada.");
+    }
+
+    request.user = {
+      id: user.id,
+      email: user.email,
+      roles: user.roles.map((item) => item.role.code)
+    };
+    return true;
   }
 
   private extractBearerToken(header: string | string[] | undefined) {

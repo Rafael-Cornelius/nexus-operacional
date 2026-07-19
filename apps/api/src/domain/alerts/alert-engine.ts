@@ -1,7 +1,7 @@
 import { AlertStatus } from "../calculations/types";
 
 export interface AlertRuleInput {
-  metric: "overweight" | "loss" | "yield" | "downtime";
+  metric: "overweight" | "loss" | "yield" | "downtime" | "production";
   value: number;
   target: number;
 }
@@ -17,7 +17,8 @@ export function recommendedAction(metric: AlertRuleInput["metric"], status: Aler
     overweight: "Ajustar dosagem, conferir a pesagem e validar a média de amostras.",
     loss: "Investigar a causa, registrar a ação corretiva e revisar o processo.",
     yield: "Revisar receita, rendimento da massa e perdas de pesagem.",
-    downtime: "Acionar a área responsável e eliminar a causa recorrente da parada."
+    downtime: "Acionar a área responsável e eliminar a causa recorrente da parada.",
+    production: "Revisar o plano, a capacidade e as restrições que impediram atingir a produção."
   };
   return actions[metric];
 }
@@ -34,7 +35,7 @@ export function classifyRule(input: AlertRuleInput): AlertStatus {
     return "ATTENTION";
   }
 
-  if (metric === "yield") {
+  if (metric === "yield" || metric === "production") {
     if (value >= target) return "OK";
     if (value >= target * 0.95) return "MEDIUM";
     if (value >= target * 0.9) return "ATTENTION";

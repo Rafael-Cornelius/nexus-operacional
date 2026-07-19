@@ -4,6 +4,7 @@ import {
   BarChart3,
   Boxes,
   CalendarDays,
+  Clock3,
   ClipboardList,
   Scale,
   Database,
@@ -16,7 +17,8 @@ import {
   ShieldCheck,
   Target,
   TimerReset,
-  Users
+  Users,
+  Wrench
 } from "lucide-react";
 
 export type NavigationRole = "ADMIN" | "MANAGER" | "SUPERVISOR" | "OPERATOR" | "VIEWER";
@@ -32,6 +34,8 @@ export const navigation = [
   { href: "/paradas", label: "Paradas", icon: TimerReset, roles: ["ADMIN", "MANAGER", "SUPERVISOR", "OPERATOR"] },
   { href: "/produtividade", label: "Produtividade", icon: Gauge, roles: ["ADMIN", "MANAGER", "SUPERVISOR", "VIEWER"] },
   { href: "/produtos", label: "Produtos", icon: Database, roles: ["ADMIN", "MANAGER", "SUPERVISOR", "OPERATOR", "VIEWER"] },
+  { href: "/equipamentos", label: "Equipamentos", icon: Wrench, roles: ["ADMIN", "MANAGER", "SUPERVISOR", "OPERATOR", "VIEWER"] },
+  { href: "/turnos", label: "Turnos", icon: Clock3, roles: ["ADMIN", "MANAGER", "SUPERVISOR", "OPERATOR", "VIEWER"] },
   { href: "/semanas", label: "Semanas", icon: CalendarDays, roles: ["ADMIN", "MANAGER", "SUPERVISOR", "OPERATOR", "VIEWER"] },
   { href: "/historico", label: "Historico", icon: History, roles: ["ADMIN", "MANAGER", "SUPERVISOR", "VIEWER"] },
   { href: "/relatorios", label: "Relatorios", icon: FileSpreadsheet, roles: ["ADMIN", "MANAGER", "SUPERVISOR", "VIEWER"] },

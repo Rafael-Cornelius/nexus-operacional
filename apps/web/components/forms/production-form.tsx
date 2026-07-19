@@ -5,8 +5,12 @@ import { RefreshCw, RotateCcw, Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, StatusBadge } from "@/components/ui/card";
 import { DataTable } from "@/components/tables/data-table";
+import { EntryWorkflowActions } from "@/components/workflow/entry-workflow-actions";
+import { createDemoProductionEntries, demoWorkflowProducts, demoWorkflowWeek } from "@/lib/demo/workflow-preview";
 import { formatCurrency, formatKg, formatPercent } from "@/lib/format";
-import { apiGetClient, apiPostClient, getSession } from "@/services/api";
+import type { WorkflowEntry } from "@/lib/operational-workflow";
+import { resolveExplicitWeekId } from "@/lib/week-selection";
+import { apiGetClient, apiPostClient, DEMO_MODE, getSession } from "@/services/api";
 
 interface FormState {
   productionOrder: string;
@@ -47,7 +51,7 @@ interface WeekRow {
   status: string;
 }
 
-interface EntryRow {
+interface EntryRow extends WorkflowEntry {
   id: string;
   date: string;
   productionOrder: string;
@@ -158,6 +162,15 @@ export function ProductionForm({ sector }: { sector: "P1" | "P2" }) {
     if (!session) return;
     setLoading(true);
     try {
+      if (DEMO_MODE) {
+        const sectorProducts = demoWorkflowProducts.filter((product) => product.defaultSector.code === sector);
+        setProducts(sectorProducts);
+        setWeeks([demoWorkflowWeek]);
+        setProductId((current) => current || sectorProducts[0]?.id || "");
+        setWeekId((current) => current || demoWorkflowWeek.id);
+        setMessage("Referências demonstrativas carregadas. As alterações ficam somente neste preview.");
+        return;
+      }
       const [productRows, weekRows] = await Promise.all([
         apiGetClient<ProductRow[]>("/products?active=true"),
         apiGetClient<WeekRow[]>("/weeks")
@@ -166,8 +179,8 @@ export function ProductionForm({ sector }: { sector: "P1" | "P2" }) {
       setProducts(sectorProducts);
       setWeeks(weekRows);
       setProductId((current) => current || sectorProducts[0]?.id || "");
-      setWeekId((current) => current || weekRows.find((week) => week.status !== "CLOSED" && week.status !== "ARCHIVED")?.id || weekRows[0]?.id || "");
-      setMessage("Produtos e semanas carregados da API.");
+      setWeekId((current) => resolveExplicitWeekId(weekRows, current));
+      setMessage(weekRows.length ? "Produtos e semanas carregados; selecione a semana do lançamento." : "Produtos carregados; nenhuma semana operacional cadastrada.");
     } catch (error) {
       setProducts([]);
       setWeeks([]);
@@ -183,6 +196,11 @@ export function ProductionForm({ sector }: { sector: "P1" | "P2" }) {
     if (!nextWeekId) return;
     if (!session) {
       setEntries([]);
+      return;
+    }
+    if (DEMO_MODE) {
+      setEntries((current) => current.length ? current : createDemoProductionEntries(sector));
+      setMessage("Lançamentos demonstrativos carregados; o workflow funciona localmente.");
       return;
     }
     try {
@@ -209,6 +227,11 @@ export function ProductionForm({ sector }: { sector: "P1" | "P2" }) {
   }
 
   async function validateWithBackend() {
+    if (DEMO_MODE) {
+      setServerPreview(localPreview);
+      setMessage("Cálculo atualizado localmente no preview demonstrativo.");
+      return;
+    }
     setLoading(true);
     try {
       const response = await apiPostClient<PreviewState>("/production/preview", {
@@ -240,6 +263,29 @@ export function ProductionForm({ sector }: { sector: "P1" | "P2" }) {
     }
     if (!weekId || !productId) {
       setMessage("Selecione uma semana e um produto carregados do banco.");
+      return;
+    }
+
+    if (DEMO_MODE) {
+      const demoEntry: EntryRow = {
+        id: `demo-production-${sector}-${Date.now()}`,
+        date: `${date}T00:00:00.000Z`,
+        productionOrder: state.productionOrder || `${sector}-NOVA-OP`,
+        packedBoxes: state.packedBoxes,
+        producedKg: preview.producedKg,
+        expectedYieldKg: preview.expectedYieldKg,
+        realYieldPercent: preview.realYieldPercent,
+        overweightTotalKg: preview.overweightTotalKg,
+        productionCost: preview.productionCost,
+        lossesCost: preview.lossesCost,
+        overweightCost: preview.overweightCost,
+        status: preview.status,
+        product: selectedProduct ? { code: selectedProduct.code, name: selectedProduct.name } : undefined,
+        workflowStatus: "DRAFT",
+        version: 1
+      };
+      setEntries((current) => [demoEntry, ...current]);
+      setMessage("Rascunho criado localmente. Use Enviar para iniciar a aprovação demonstrativa.");
       return;
     }
 
@@ -342,9 +388,25 @@ export function ProductionForm({ sector }: { sector: "P1" | "P2" }) {
                 "Custo produção": formatCurrency(Number(entry.productionCost ?? 0)),
                 "Custo perdas": formatCurrency(Number(entry.lossesCost ?? 0)),
                 "Custo sobrepeso": formatCurrency(Number(entry.overweightCost ?? 0)),
-                Status: entry.status
+                Status: entry.status,
+                Fluxo: (
+                  <EntryWorkflowActions
+                    entry={entry}
+                    resource="production"
+                    roles={session?.user.roles ?? []}
+                    actorId={session?.user.id}
+                    demo={DEMO_MODE}
+                    disabled={loading}
+                    onChanged={async (updated) => {
+                      if (DEMO_MODE) setEntries((current) => current.map((item) => item.id === updated.id ? updated : item));
+                      else await loadEntries(weekId);
+                    }}
+                    onReload={() => loadEntries(weekId)}
+                    onMessage={setMessage}
+                  />
+                )
               }))
-            : [{ Data: "-", Produto: "Nenhum lancamento carregado para a semana selecionada.", OP: "-", Caixas: "-", Produzido: "-", Rendimento: "-", Sobrepeso: "-", "Custo produção": "-", "Custo perdas": "-", "Custo sobrepeso": "-", Status: "-" }]
+            : [{ Data: "-", Produto: "Nenhum lancamento carregado para a semana selecionada.", OP: "-", Caixas: "-", Produzido: "-", Rendimento: "-", Sobrepeso: "-", "Custo produção": "-", "Custo perdas": "-", "Custo sobrepeso": "-", Status: "-", Fluxo: <span>-</span> }]
         }
       />
     </div>

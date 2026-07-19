@@ -4,8 +4,10 @@ import { Maximize2, RefreshCcw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, StatCard } from "@/components/ui/card";
-import { createDemoExecutiveDeck } from "@/lib/demo/operational-preview";
+import { createDemoExecutiveDeck, demoDashboardAlerts } from "@/lib/demo/operational-preview";
 import { formatKg, formatPercent } from "@/lib/format";
+import { goalVisualState, type OperationalGoalAlert } from "@/lib/operational-goals";
+import { resolveExplicitWeekId } from "@/lib/week-selection";
 import { apiGetClient, DEMO_MODE, getSession } from "@/services/api";
 
 interface ExecutiveDeck {
@@ -38,6 +40,13 @@ interface DowntimePayload {
   stoppedMinutes: number;
 }
 
+interface GoalAlert extends OperationalGoalAlert {
+  goalId: string;
+  name: string;
+  value: number;
+  action: string;
+}
+
 function asKpis(data: unknown): KpiPayload | null {
   if (!data || typeof data !== "object") return null;
   const record = data as Partial<KpiPayload>;
@@ -62,6 +71,7 @@ function asDowntime(data: unknown): DowntimePayload[] {
 
 export function MeetingMode() {
   const [deck, setDeck] = useState<ExecutiveDeck | null>(null);
+  const [alerts, setAlerts] = useState<GoalAlert[]>([]);
   const [weeks, setWeeks] = useState<WeekRow[]>([]);
   const [selectedWeekId, setSelectedWeekId] = useState("");
   const [message, setMessage] = useState("Aguardando API para gerar apresentacao executiva.");
@@ -70,31 +80,42 @@ export function MeetingMode() {
     if (DEMO_MODE) {
       const demoDeck = createDemoExecutiveDeck();
       setDeck(demoDeck);
+      setAlerts(demoDashboardAlerts);
       setMessage("Preview demonstrativo isolado; nenhum dado operacional real foi usado.");
       return;
     }
 
     if (!getSession()) {
       setDeck(null);
+      setAlerts([]);
       setMessage("Entre no sistema para gerar apresentacao executiva com dados reais.");
       return;
     }
 
     try {
       const weekRows = await apiGetClient<WeekRow[]>("/weeks");
-      const weekId = nextWeekId || weekRows[0]?.id || "";
+      const weekId = resolveExplicitWeekId(weekRows, nextWeekId);
       setWeeks(weekRows);
       setSelectedWeekId(weekId);
       if (!weekId) {
         setDeck(null);
-        setMessage("Cadastre uma semana operacional antes de gerar a apresentação.");
+        setAlerts([]);
+        setMessage(weekRows.length ? "Selecione uma semana para gerar a apresentação." : "Cadastre uma semana operacional antes de gerar a apresentação.");
         return;
       }
-      const data = await apiGetClient<ExecutiveDeck>(`/presentations/executive?weekId=${encodeURIComponent(weekId)}`);
+      setDeck(null);
+      setAlerts([]);
+      setMessage("Gerando a apresentação da semana selecionada.");
+      const [data, nextAlerts] = await Promise.all([
+        apiGetClient<ExecutiveDeck>(`/presentations/executive?weekId=${encodeURIComponent(weekId)}`),
+        apiGetClient<GoalAlert[]>(`/dashboard/alerts?weekId=${encodeURIComponent(weekId)}`)
+      ]);
       setDeck(data);
+      setAlerts(nextAlerts);
       setMessage(`Dados reais da API — ${data.week?.label ?? "semana selecionada"}; apresentação gerada em ${new Date(data.generatedAt).toLocaleString("pt-BR")}.`);
     } catch (error) {
       setDeck(null);
+      setAlerts([]);
       setMessage(error instanceof Error ? error.message : "Nao foi possivel gerar a apresentacao.");
     }
   }
@@ -116,9 +137,9 @@ export function MeetingMode() {
 
   const stats = executiveKpis
     ? [
-        { label: "Producao total", value: formatKg(executiveKpis.productionTotalKg), status: "OK" as const },
-        { label: "Perdas totais", value: formatKg(executiveKpis.lossesTotalKg), status: executiveKpis.lossesTotalKg > 80 ? "ATTENTION" as const : "OK" as const },
-        { label: "Rendimento medio", value: formatPercent(executiveKpis.averageYield), status: executiveKpis.averageYield < 0.9 ? "ATTENTION" as const : "OK" as const }
+        { label: "Producao total", value: formatKg(executiveKpis.productionTotalKg), ...goalVisualState(alerts, ["produced_kg"], formatKg) },
+        { label: "Perdas totais", value: formatKg(executiveKpis.lossesTotalKg), ...goalVisualState(alerts, ["losses_kg", "loss"], formatKg) },
+        { label: "Rendimento medio", value: formatPercent(executiveKpis.averageYield), ...goalVisualState(alerts, ["yield"], formatPercent) }
       ]
     : [];
 
@@ -134,6 +155,7 @@ export function MeetingMode() {
           <div className="flex gap-2">
             {!DEMO_MODE && weeks.length ? (
               <select className="rounded-md border border-white/15 bg-[#111827] px-3 py-2 text-sm text-slate-100" value={selectedWeekId} onChange={(event) => void loadDeck(event.target.value)}>
+                <option value="">Selecione uma semana</option>
                 {weeks.map((week) => <option key={week.id} value={week.id}>{week.label} — {week.status}</option>)}
               </select>
             ) : null}
@@ -151,7 +173,7 @@ export function MeetingMode() {
       </section>
       <div className="grid gap-4 md:grid-cols-3">
         {stats.map((kpi) => (
-          <StatCard key={kpi.label} label={kpi.label} value={kpi.value} status={kpi.status} />
+          <StatCard key={kpi.label} label={kpi.label} value={kpi.value} hint={kpi.hint} status={kpi.status} />
         ))}
       </div>
       <Card>

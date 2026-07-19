@@ -63,14 +63,37 @@ async function main() {
     update: {}
   });
 
-  for (const line of [
-    { sectorId: p1.id, code: "P1-L1", name: "Linha P1 principal" },
-    { sectorId: p2.id, code: "P2-L1", name: "Linha P2 principal" }
+  const p1Line = await prisma.productionLine.upsert({
+    where: { sectorId_code: { sectorId: p1.id, code: "P1-L1" } },
+    create: { sectorId: p1.id, code: "P1-L1", name: "Linha P1 principal" },
+    update: {}
+  });
+  const p2Line = await prisma.productionLine.upsert({
+    where: { sectorId_code: { sectorId: p2.id, code: "P2-L1" } },
+    create: { sectorId: p2.id, code: "P2-L1", name: "Linha P2 principal" },
+    update: {}
+  });
+
+  for (const shift of [
+    { code: "T1", name: "Turno 1", startsAt: new Date("1970-01-01T06:00:00.000Z"), endsAt: new Date("1970-01-01T14:00:00.000Z") },
+    { code: "T2", name: "Turno 2", startsAt: new Date("1970-01-01T14:00:00.000Z"), endsAt: new Date("1970-01-01T22:00:00.000Z") },
+    { code: "T3", name: "Turno 3", startsAt: new Date("1970-01-01T22:00:00.000Z"), endsAt: new Date("1970-01-01T06:00:00.000Z") }
   ]) {
-    await prisma.productionLine.upsert({
-      where: { sectorId_code: { sectorId: line.sectorId, code: line.code } },
-      create: line,
-      update: {}
+    await prisma.shift.upsert({ where: { code: shift.code }, create: shift, update: { name: shift.name, startsAt: shift.startsAt, endsAt: shift.endsAt } });
+  }
+
+  for (const equipment of [
+    { productionLineId: p1Line.id, code: "M1", name: "Máquina 1", type: "PROCESSAMENTO" },
+    { productionLineId: p1Line.id, code: "MQ", name: "Máquina MQ", type: "PROCESSAMENTO" },
+    { productionLineId: p1Line.id, code: "GIRO", name: "Giro", type: "RESFRIAMENTO" },
+    { productionLineId: p1Line.id, code: "FREEZER", name: "Freezer", type: "CONGELAMENTO" },
+    { productionLineId: p2Line.id, code: "M1", name: "Máquina 1", type: "PROCESSAMENTO" },
+    { productionLineId: p2Line.id, code: "FREEZER", name: "Freezer", type: "CONGELAMENTO" }
+  ]) {
+    await prisma.equipment.upsert({
+      where: { productionLineId_code: { productionLineId: equipment.productionLineId, code: equipment.code } },
+      create: equipment,
+      update: { name: equipment.name, type: equipment.type, active: true, deletedAt: null }
     });
   }
 
@@ -132,10 +155,10 @@ async function main() {
   }
 
   for (const goal of [
-    { name: "Sobrepeso maximo", metric: "overweight_percent", targetValue: 0.02, comparator: "<=" },
+    { name: "Sobrepeso maximo", metric: "overweight", targetValue: 0.02, comparator: "<=" },
     { name: "Perdas maximas", metric: "losses_kg", targetValue: 50, comparator: "<=" },
-    { name: "Rendimento minimo", metric: "yield_percent", targetValue: 0.95, comparator: ">=" },
-    { name: "Producao semanal minima", metric: "production_kg", targetValue: 20000, comparator: ">=" }
+    { name: "Rendimento minimo", metric: "yield", targetValue: 0.95, comparator: ">=" },
+    { name: "Producao semanal minima", metric: "produced_kg", targetValue: 20000, comparator: ">=" }
   ]) {
     const existing = await prisma.goal.findFirst({ where: { metric: goal.metric, sectorCode: null } });
     if (existing) {

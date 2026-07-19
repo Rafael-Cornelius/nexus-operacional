@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Query } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Patch, Post, Query } from "@nestjs/common";
 import { CurrentUser } from "../../infrastructure/security/current-user";
 import { CurrentUserData } from "../auth/current-user.decorator";
 import { Roles } from "../auth/roles.decorator";
@@ -26,9 +26,51 @@ export class LossesController {
     return this.losses.summary(weekId);
   }
 
+  @Roles("ADMIN", "MANAGER", "SUPERVISOR", "OPERATOR", "VIEWER")
+  @Get(":id")
+  getById(@Param("id", ParseUUIDPipe) id: string) {
+    return this.losses.getById(id);
+  }
+
   @Roles("ADMIN", "SUPERVISOR", "OPERATOR")
   @Post()
   create(@Body() body: unknown, @CurrentUserData() user?: CurrentUser) {
     return this.losses.create(body, user);
+  }
+
+  @Roles("ADMIN", "SUPERVISOR", "OPERATOR")
+  @Patch(":id")
+  update(@Param("id", ParseUUIDPipe) id: string, @Body() body: unknown, @CurrentUserData() user?: CurrentUser) {
+    return this.losses.update(id, body, user);
+  }
+
+  @Roles("ADMIN", "SUPERVISOR")
+  @Delete(":id")
+  softDelete(@Param("id", ParseUUIDPipe) id: string, @Body() body: unknown, @CurrentUserData() user?: CurrentUser) {
+    return this.losses.softDelete(id, body, user);
+  }
+
+  @Roles("ADMIN", "SUPERVISOR")
+  @Post(":id/restore")
+  restore(@Param("id", ParseUUIDPipe) id: string, @Body() body: unknown, @CurrentUserData() user?: CurrentUser) {
+    return this.losses.restore(id, body, user);
+  }
+
+  @Roles("ADMIN", "SUPERVISOR", "OPERATOR")
+  @Post(":id/submit")
+  submit(@Param("id", ParseUUIDPipe) id: string, @Body() body: unknown, @CurrentUserData() user?: CurrentUser) {
+    return this.losses.submit(id, body, user);
+  }
+
+  @Roles("ADMIN", "MANAGER", "SUPERVISOR")
+  @Post(":id/approve")
+  approve(@Param("id", ParseUUIDPipe) id: string, @Body() body: unknown, @CurrentUserData() user?: CurrentUser) {
+    return this.losses.approve(id, body, user);
+  }
+
+  @Roles("ADMIN", "MANAGER", "SUPERVISOR")
+  @Post(":id/reject")
+  reject(@Param("id", ParseUUIDPipe) id: string, @Body() body: unknown, @CurrentUserData() user?: CurrentUser) {
+    return this.losses.reject(id, body, user);
   }
 }

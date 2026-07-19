@@ -6,8 +6,14 @@ import { PageHeader } from "@/components/layout/page-header";
 import { DataTable } from "@/components/tables/data-table";
 import { Button } from "@/components/ui/button";
 import { Card, StatCard } from "@/components/ui/card";
-import { apiGetClient, apiPostClient, getSession } from "@/services/api";
+import { EntryWorkflowActions } from "@/components/workflow/entry-workflow-actions";
+import { demoDashboardAlerts } from "@/lib/demo/operational-preview";
+import { createDemoDowntimeEntries, demoWorkflowDowntimeReasons, demoWorkflowWeek } from "@/lib/demo/workflow-preview";
 import { formatKg, formatPercent } from "@/lib/format";
+import { goalVisualState, type OperationalGoalAlert } from "@/lib/operational-goals";
+import type { WorkflowEntry } from "@/lib/operational-workflow";
+import { resolveExplicitWeekId } from "@/lib/week-selection";
+import { apiGetClient, apiPostClient, DEMO_MODE, getSession } from "@/services/api";
 
 interface WeekRow {
   id: string;
@@ -20,7 +26,7 @@ interface ReasonRow {
   name: string;
 }
 
-interface DowntimeEntryRow {
+interface DowntimeEntryRow extends WorkflowEntry {
   id: string;
   date: string;
   stoppedMinutes: string | number;
@@ -40,6 +46,7 @@ export default function DowntimePage() {
   const [weeks, setWeeks] = useState<WeekRow[]>([]);
   const [reasons, setReasons] = useState<ReasonRow[]>([]);
   const [entries, setEntries] = useState<DowntimeEntryRow[]>([]);
+  const [alerts, setAlerts] = useState<OperationalGoalAlert[]>([]);
   const [weekId, setWeekId] = useState("");
   const [reasonId, setReasonId] = useState("");
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
@@ -61,24 +68,43 @@ export default function DowntimePage() {
     }
     setLoading(true);
     try {
+      if (DEMO_MODE) {
+        setWeeks([demoWorkflowWeek]);
+        setReasons(demoWorkflowDowntimeReasons);
+        setWeekId(demoWorkflowWeek.id);
+        setReasonId((current) => current || demoWorkflowDowntimeReasons[0]?.id || "");
+        setEntries((current) => current.length ? current : createDemoDowntimeEntries());
+        setAlerts(demoDashboardAlerts);
+        setMessage("Paradas demonstrativas carregadas; o workflow funciona localmente.");
+        return;
+      }
       const [weekRows, reasonRows] = await Promise.all([
         apiGetClient<WeekRow[]>("/weeks"),
         apiGetClient<ReasonRow[]>("/downtime/reasons")
       ]);
-      const selectedWeek = requestedWeek || weekRows.find((week) => week.status !== "CLOSED" && week.status !== "ARCHIVED")?.id || weekRows[0]?.id || "";
+      const selectedWeek = resolveExplicitWeekId(weekRows, requestedWeek);
       setWeeks(weekRows);
       setReasons(reasonRows);
       setWeekId(selectedWeek);
       setReasonId((current) => current || reasonRows[0]?.id || "");
       if (selectedWeek) {
-        const rows = await apiGetClient<DowntimeEntryRow[]>(`/downtime?weekId=${selectedWeek}`);
+        const [rows, nextAlerts] = await Promise.all([
+          apiGetClient<DowntimeEntryRow[]>(`/downtime?weekId=${encodeURIComponent(selectedWeek)}`),
+          apiGetClient<OperationalGoalAlert[]>(`/dashboard/alerts?weekId=${encodeURIComponent(selectedWeek)}`)
+        ]);
         setEntries(rows);
+        setAlerts(nextAlerts);
+        setMessage("Paradas carregadas da API.");
+      } else {
+        setEntries([]);
+        setAlerts([]);
+        setMessage(weekRows.length ? "Selecione uma semana para carregar as paradas." : "Nenhuma semana operacional cadastrada.");
       }
-      setMessage("Paradas carregadas da API.");
     } catch (error) {
       setWeeks([]);
       setReasons([]);
       setEntries([]);
+      setAlerts([]);
       setMessage(error instanceof Error ? error.message : "Nao foi possivel carregar paradas da API.");
     } finally {
       setLoading(false);
@@ -92,6 +118,27 @@ export default function DowntimePage() {
   async function saveDowntime() {
     if (!session || !weekId || !reasonId) {
       setMessage("Entre no sistema e selecione semana/motivo para salvar.");
+      return;
+    }
+    if (DEMO_MODE) {
+      const productionMinutes = Math.max((new Date(at(date, productionEnd)).getTime() - new Date(at(date, productionStart)).getTime()) / 60_000, 1);
+      const stoppedMinutes = Math.max((new Date(at(date, downtimeEnd)).getTime() - new Date(at(date, downtimeStart)).getTime()) / 60_000, 0);
+      const selectedReason = reasons.find((reason) => reason.id === reasonId);
+      const demoEntry: DowntimeEntryRow = {
+        id: `demo-downtime-${Date.now()}`,
+        date: `${date}T00:00:00.000Z`,
+        stoppedMinutes,
+        stoppedPercent: stoppedMinutes / productionMinutes,
+        realKgHour: producedMassKg / (productionMinutes / 60),
+        possibleKgHour: producedMassKg / (Math.max(productionMinutes - stoppedMinutes, 1) / 60),
+        status: stoppedMinutes / productionMinutes > 0.05 ? "ATTENTION" : "OK",
+        sector: { code: sector },
+        reason: selectedReason,
+        workflowStatus: "DRAFT",
+        version: 1
+      };
+      setEntries((current) => [demoEntry, ...current]);
+      setMessage("Rascunho de parada criado localmente. Use Enviar para iniciar a aprovação demonstrativa.");
       return;
     }
     setLoading(true);
@@ -123,6 +170,7 @@ export default function DowntimePage() {
   const stoppedTotal = entries.reduce((sum, entry) => sum + Number(entry.stoppedMinutes), 0);
   const averageRealKgHour = entries.length ? entries.reduce((sum, entry) => sum + Number(entry.realKgHour), 0) / entries.length : 0;
   const averagePingandoKgHour = entries.length ? entries.reduce((sum, entry) => sum + Number(entry.possibleKgHour), 0) / entries.length : 0;
+  const downtimeGoal = goalVisualState(alerts, ["downtime_minutes"], (target) => `${target.toLocaleString("pt-BR")} min`);
   const rows = entries.length
     ? entries.map((entry) => ({
         Data: entry.date.slice(0, 10),
@@ -132,16 +180,32 @@ export default function DowntimePage() {
         "% parada": formatPercent(Number(entry.stoppedPercent)),
         "kg/h real": formatKg(Number(entry.realKgHour)),
         "kg/h pingando": formatKg(Number(entry.possibleKgHour)),
-        Status: entry.status
+        Status: entry.status,
+        Fluxo: (
+          <EntryWorkflowActions
+            entry={entry}
+            resource="downtime"
+            roles={session?.user.roles ?? []}
+            actorId={session?.user.id}
+            demo={DEMO_MODE}
+            disabled={loading}
+            onChanged={async (updated) => {
+              if (DEMO_MODE) setEntries((current) => current.map((item) => item.id === updated.id ? updated : item));
+              else await loadData(weekId);
+            }}
+            onReload={() => loadData(weekId)}
+            onMessage={setMessage}
+          />
+        )
       }))
-    : [{ Data: "-", Setor: "-", Motivo: "Nenhuma parada carregada.", Tempo: "-", "% parada": "-", "kg/h real": "-", "kg/h pingando": "-", Status: "-" }];
+    : [{ Data: "-", Setor: "-", Motivo: "Nenhuma parada carregada.", Tempo: "-", "% parada": "-", "kg/h real": "-", "kg/h pingando": "-", Status: "-", Fluxo: <span>-</span> }];
 
   return (
     <div className="space-y-6">
       <PageHeader title="Controle de paradas" description="Controle de inicio, termino, motivo, tempo parado, eficiencia e impacto produtivo." />
       <Card>
         <div className="grid gap-4 md:grid-cols-4">
-          <Select label="Semana" value={weekId} onChange={setWeekId} options={weeks.map((week) => ({ value: week.id, label: `${week.label} - ${week.status}` }))} />
+          <Select label="Semana" value={weekId} onChange={(value) => { setWeekId(value); void loadData(value); }} options={weeks.map((week) => ({ value: week.id, label: `${week.label} - ${week.status}` }))} />
           <Select label="Motivo" value={reasonId} onChange={setReasonId} options={reasons.map((reason) => ({ value: reason.id, label: reason.name }))} />
           <Select label="Setor" value={sector} onChange={(value) => setSector(value as "P1" | "P2")} options={[{ value: "P1", label: "P1" }, { value: "P2", label: "P2" }]} />
           <Input label="Data" type="date" value={date} onChange={setDate} />
@@ -164,11 +228,11 @@ export default function DowntimePage() {
         <p className="mt-4 text-sm text-slate-300">{message}</p>
       </Card>
       <div className="grid gap-4 md:grid-cols-4">
-        <StatCard label="Tempo parado" value={`${stoppedTotal.toLocaleString("pt-BR")} min`} status={stoppedTotal > 120 ? "MEDIUM" : "OK"} />
+        <StatCard label="Tempo parado" value={`${stoppedTotal.toLocaleString("pt-BR")} min`} hint={downtimeGoal.hint} status={downtimeGoal.status} />
         <StatCard label="Registros" value={String(entries.length)} />
         <StatCard label="kg/h real médio" value={formatKg(averageRealKgHour)} />
         <StatCard label="kg/h pingando médio" value={formatKg(averagePingandoKgHour)} />
-        <StatCard label="Status operacional" value={stoppedTotal > 120 ? "Atencao" : "OK"} status={stoppedTotal > 120 ? "ATTENTION" : "OK"} />
+        <StatCard label="Status operacional" value={downtimeGoal.status ?? "Sem meta"} hint={downtimeGoal.hint} status={downtimeGoal.status} />
       </div>
       <DataTable title="Paradas" rows={rows} />
     </div>

@@ -1,5 +1,33 @@
-import { describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { BackupsService } from "../../apps/api/src/modules/backups/backups.service";
+
+const temporaryDirectories: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
+});
+
+async function backupFixture() {
+  const directory = await mkdtemp(join(tmpdir(), "nexus-backup-test-"));
+  temporaryDirectories.push(directory);
+  const filePath = join(directory, "snapshot.json");
+  const payload = JSON.stringify({
+    app: "NEXUS OPERACIONAL",
+    generatedAt: "2026-07-18T12:00:00.000Z",
+    format: "nexus-json-snapshot-v1",
+    tables: { users: [] }
+  });
+  await writeFile(filePath, payload, "utf8");
+  return {
+    directory,
+    filePath,
+    checksum: createHash("sha256").update(payload).digest("hex")
+  };
+}
 
 describe("backups service", () => {
   it("serializes BigInt sizes before returning backup rows", async () => {
@@ -39,5 +67,83 @@ describe("backups service", () => {
         latestCreatedAt: "2026-05-25T10:00:00.000Z"
       }
     });
+  });
+
+  it("verifies checksum and snapshot structure before a restore", async () => {
+    const fixture = await backupFixture();
+    const backup = {
+      id: "8fdb349d-ea49-4ef4-842a-970be880c988",
+      filePath: fixture.filePath,
+      status: "COMPLETED",
+      sizeBytes: 100n,
+      checksum: fixture.checksum,
+      createdAt: new Date("2026-07-18T12:00:00.000Z"),
+      createdBy: null
+    };
+    const prisma = { backup: { findUnique: vi.fn().mockResolvedValue(backup) } };
+    const config = { get: vi.fn((key: string) => key === "BACKUP_DIR" ? fixture.directory : undefined) };
+    const audit = { record: vi.fn() };
+    const service = new BackupsService(prisma as never, config as never, audit as never);
+
+    await expect(service.verify(backup.id)).resolves.toMatchObject({
+      id: backup.id,
+      checksumValid: true,
+      tableCount: 1,
+      rowCount: 0
+    });
+    expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({ action: "verify", entityId: backup.id }));
+  });
+
+  it("rejects a backup whose file no longer matches its checksum", async () => {
+    const fixture = await backupFixture();
+    const prisma = {
+      backup: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "76092fc5-8b27-47dc-a20f-02965688a756",
+          filePath: fixture.filePath,
+          status: "COMPLETED",
+          sizeBytes: 100n,
+          checksum: "checksum-incorreto",
+          createdAt: new Date(),
+          createdBy: null
+        })
+      }
+    };
+    const config = { get: vi.fn((key: string) => key === "BACKUP_DIR" ? fixture.directory : undefined) };
+    const service = new BackupsService(prisma as never, config as never, { record: vi.fn() } as never);
+
+    await expect(service.verify("76092fc5-8b27-47dc-a20f-02965688a756")).rejects.toThrow("Checksum");
+  });
+
+  it("rehearses every row in temporary PostgreSQL tables without changing production tables", async () => {
+    const fixture = await backupFixture();
+    const backup = {
+      id: "a346ae3c-dd96-445d-8fa9-ddbcd4d01c2e",
+      filePath: fixture.filePath,
+      status: "COMPLETED",
+      sizeBytes: 100n,
+      checksum: fixture.checksum,
+      createdAt: new Date("2026-07-18T12:00:00.000Z"),
+      createdBy: null
+    };
+    const transaction = {
+      $executeRawUnsafe: vi.fn().mockResolvedValue(0),
+      $queryRawUnsafe: vi.fn().mockResolvedValue([{ count: 0n }])
+    };
+    const prisma = {
+      backup: { findUnique: vi.fn().mockResolvedValue(backup) },
+      $queryRaw: vi.fn().mockResolvedValue([{ table_name: "users" }]),
+      $transaction: vi.fn(async (operation: (client: typeof transaction) => Promise<unknown>) => operation(transaction))
+    };
+    const config = { get: vi.fn((key: string) => key === "BACKUP_DIR" ? fixture.directory : undefined) };
+    const service = new BackupsService(prisma as never, config as never, { record: vi.fn() } as never);
+
+    await expect(service.rehearseRestore(backup.id)).resolves.toMatchObject({
+      status: "RESTORE_REHEARSAL_PASSED",
+      destructive: false,
+      tableCount: 1,
+      rowCount: 0
+    });
+    expect(transaction.$executeRawUnsafe).toHaveBeenCalledWith(expect.stringContaining("CREATE TEMP TABLE"));
   });
 });

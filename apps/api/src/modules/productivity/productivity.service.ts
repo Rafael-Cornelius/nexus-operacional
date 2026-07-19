@@ -8,14 +8,14 @@ export class ProductivityService {
 
   async summary(weekId?: string) {
     const production = await this.prisma.productionEntry.aggregate({
-      where: { deletedAt: null, weekId },
+      where: { deletedAt: null, workflowStatus: "APPROVED", weekId },
       _sum: { producedKg: true },
       _avg: { realYieldPercent: true },
       _count: true
     });
     const days = await this.prisma.productionEntry.groupBy({
       by: ["date"],
-      where: { deletedAt: null, weekId },
+      where: { deletedAt: null, workflowStatus: "APPROVED", weekId },
       _sum: { producedKg: true },
       _avg: { realYieldPercent: true },
       orderBy: { date: "asc" }

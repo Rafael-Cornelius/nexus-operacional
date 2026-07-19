@@ -8,6 +8,8 @@ const reviewRoutes = [
   { slug: "dashboard", path: "/dashboard" },
   { slug: "importacao", path: "/importacao" },
   { slug: "produtos", path: "/produtos" },
+  { slug: "equipamentos", path: "/equipamentos" },
+  { slug: "turnos", path: "/turnos" },
   { slug: "semanas", path: "/semanas" },
   { slug: "producao-p1", path: "/producao/p1" },
   { slug: "perdas", path: "/perdas" },

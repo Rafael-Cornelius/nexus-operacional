@@ -6,6 +6,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { DataTable } from "@/components/tables/data-table";
 import { Button } from "@/components/ui/button";
 import { Card, StatCard } from "@/components/ui/card";
+import { resolveExplicitWeekId } from "@/lib/week-selection";
 import { apiGetClient, apiPostClient, getSession } from "@/services/api";
 
 interface Week { id: string; label: string; status: string }
@@ -30,11 +31,16 @@ export default function DosagePage() {
     setLoading(true);
     try {
       const [weekRows, productRows] = await Promise.all([apiGetClient<Week[]>("/weeks"), apiGetClient<Product[]>("/products?active=true")]);
-      const selectedWeek = nextWeek || weekRows.find((week) => week.status === "OPEN" || week.status === "REVIEW")?.id || weekRows[0]?.id || "";
+      const selectedWeek = resolveExplicitWeekId(weekRows, nextWeek);
       const sectorProducts = productRows.filter((product) => product.defaultSector?.code === sector);
       setWeeks(weekRows); setProducts(productRows); setWeekId(selectedWeek); setProductId((current) => current || sectorProducts[0]?.id || "");
-      if (selectedWeek) setChecks(await apiGetClient<Check[]>(`/dosage?weekId=${selectedWeek}`));
-      setMessage("Amostras e referências carregadas.");
+      if (selectedWeek) {
+        setChecks(await apiGetClient<Check[]>(`/dosage?weekId=${encodeURIComponent(selectedWeek)}`));
+        setMessage("Amostras e referências carregadas.");
+      } else {
+        setChecks([]);
+        setMessage(weekRows.length ? "Selecione uma semana para carregar as amostras." : "Nenhuma semana operacional cadastrada.");
+      }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Não foi possível carregar a dosagem.");
     } finally { setLoading(false); }

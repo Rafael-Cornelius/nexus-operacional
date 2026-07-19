@@ -4,6 +4,7 @@ import { AuthController } from "./auth.controller";
 import { AuthService } from "./auth.service";
 import { JwtAuthGuard } from "./jwt-auth.guard";
 import { RolesGuard } from "./roles.guard";
+import { AuditModule } from "../audit/audit.module";
 
 function jwtAccessSecret() {
   const secret = process.env.JWT_ACCESS_SECRET;
@@ -16,6 +17,7 @@ function jwtAccessSecret() {
 
 @Module({
   imports: [
+    AuditModule,
     JwtModule.register({
       secret: jwtAccessSecret(),
       signOptions: { expiresIn: (process.env.JWT_ACCESS_TTL ?? "15m") as never }

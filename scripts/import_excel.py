@@ -13,6 +13,20 @@ from typing import Any
 from xml.etree import ElementTree as ET
 
 ERROR_VALUES = ["#N/A", "#DIV/0!", "#VALUE!", "#REF!", "#NAME?", "#NUM!", "#NULL!"]
+MONTH_NAMES = {
+    "JANEIRO": 1,
+    "FEVEREIRO": 2,
+    "MARCO": 3,
+    "ABRIL": 4,
+    "MAIO": 5,
+    "JUNHO": 6,
+    "JULHO": 7,
+    "AGOSTO": 8,
+    "SETEMBRO": 9,
+    "OUTUBRO": 10,
+    "NOVEMBRO": 11,
+    "DEZEMBRO": 12,
+}
 NS = {
     "m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
     "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
@@ -314,11 +328,45 @@ def extract_legacy_products(
     }
 
 
-def extract_operational_data(zf: zipfile.ZipFile, shared: list[str], sheet_paths: dict[str, str]) -> dict[str, Any]:
+def expected_period_from_filename(path: Path) -> tuple[str, str] | None:
+    normalized = path.stem.upper().replace("Ç", "C").replace("Ã", "A")
+    months = re.findall("|".join(MONTH_NAMES), normalized)
+    year_match = re.search(r"\b(20\d{2})\b", normalized)
+    if len(months) < 2 or not year_match:
+        return None
+    year = int(year_match.group(1))
+    first_month, last_month = sorted((MONTH_NAMES[months[0]], MONTH_NAMES[months[1]]))
+    starts_on = datetime(year, first_month, 1)
+    next_month = datetime(year + (last_month == 12), (last_month % 12) + 1, 1)
+    ends_on = next_month - timedelta(days=1)
+    return starts_on.date().isoformat(), ends_on.date().isoformat()
+
+
+def extract_operational_data(
+    zf: zipfile.ZipFile,
+    shared: list[str],
+    sheet_paths: dict[str, str],
+    expected_period: tuple[str, str] | None = None,
+) -> dict[str, Any]:
     errors: list[dict[str, Any]] = []
     production_entries: list[dict[str, Any]] = []
     loss_entries: list[dict[str, Any]] = []
     downtime_entries: list[dict[str, Any]] = []
+
+    def date_is_allowed(sheet: str, row_number: int, column: int, value: str) -> bool:
+        if not expected_period or expected_period[0] <= value <= expected_period[1]:
+            return True
+        errors.append(
+            import_error(
+                sheet,
+                row_number,
+                column,
+                "date",
+                f"Date {value} is outside the period declared by the workbook name ({expected_period[0]} to {expected_period[1]}).",
+                value,
+            )
+        )
+        return False
 
     def add_production(sheet: str, sector: str, columns: dict[str, int]) -> None:
         if sheet not in sheet_paths:
@@ -328,6 +376,8 @@ def extract_operational_data(zf: zipfile.ZipFile, shared: list[str], sheet_paths
             date = excel_date(row.get(columns["date"]))
             product_code = normalize_code(row.get(columns["product"]))
             if not week_number or not date or not product_code:
+                continue
+            if not date_is_allowed(sheet, row_number, columns["date"], date):
                 continue
             planned = as_number(row.get(columns["planned"]))
             realized = as_number(row.get(columns["realized"]))
@@ -363,6 +413,26 @@ def extract_operational_data(zf: zipfile.ZipFile, shared: list[str], sheet_paths
         "boxes": 8, "weighingLoss": 10, "generatedRework": 11, "averageWeight": 17, "notes": 21, "pricePerKg": 22,
     })
 
+    production_orders = {entry["productionOrder"] for entry in production_entries}
+    filtered_production_entries: list[dict[str, Any]] = []
+    for entry in production_entries:
+        planned = entry["plannedBatches"]
+        planned_as_code = str(int(planned)) if float(planned).is_integer() else ""
+        if planned >= 10000 and planned_as_code in production_orders and planned_as_code != entry["productionOrder"]:
+            errors.append(
+                import_error(
+                    entry["sheetName"],
+                    entry["rowNumber"],
+                    6,
+                    "plannedBatches",
+                    f"Planned batches value {planned_as_code} duplicates another production order and requires review.",
+                    planned_as_code,
+                )
+            )
+            continue
+        filtered_production_entries.append(entry)
+    production_entries = filtered_production_entries
+
     loss_sheet = "CONTROLE DE PERDAS"
     if loss_sheet in sheet_paths:
         for row_number, row in read_sheet_rows(zf, shared, sheet_paths[loss_sheet]).items():
@@ -370,6 +440,8 @@ def extract_operational_data(zf: zipfile.ZipFile, shared: list[str], sheet_paths
             quantity = as_number(row.get(4))
             machine = clean_text(row.get(3))
             if not date or quantity is None or not machine:
+                continue
+            if not date_is_allowed(loss_sheet, row_number, 2, date):
                 continue
             loss_entries.append({
                 "sheetName": loss_sheet,
@@ -389,6 +461,8 @@ def extract_operational_data(zf: zipfile.ZipFile, shared: list[str], sheet_paths
             downtime_start, downtime_end = excel_time(row.get(4)), excel_time(row.get(5))
             reason, legacy_line = clean_text(row.get(6)), clean_text(row.get(7))
             if not all([date, production_start, production_end, downtime_start, downtime_end, reason, legacy_line]):
+                continue
+            if not date_is_allowed(downtime_sheet, row_number, 1, date):
                 continue
             downtime_entries.append({
                 "sheetName": downtime_sheet,
@@ -478,7 +552,10 @@ def inspect_workbook(path: Path) -> dict[str, Any]:
             "tableCount": len(tables),
             "chartCount": len(charts),
             "errors": dict(errors),
-            "legacyData": {**extract_legacy_products(zf, shared, sheet_paths), **extract_operational_data(zf, shared, sheet_paths)},
+            "legacyData": {
+                **extract_legacy_products(zf, shared, sheet_paths),
+                **extract_operational_data(zf, shared, sheet_paths, expected_period_from_filename(path)),
+            },
         }
 
 

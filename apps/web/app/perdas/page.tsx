@@ -6,8 +6,14 @@ import { PageHeader } from "@/components/layout/page-header";
 import { DataTable } from "@/components/tables/data-table";
 import { Button } from "@/components/ui/button";
 import { Card, StatCard } from "@/components/ui/card";
+import { EntryWorkflowActions } from "@/components/workflow/entry-workflow-actions";
+import { demoDashboardAlerts } from "@/lib/demo/operational-preview";
+import { createDemoLossEntries, demoWorkflowLossTypes, demoWorkflowProducts, demoWorkflowWeek } from "@/lib/demo/workflow-preview";
 import { formatCurrency, formatKg } from "@/lib/format";
-import { apiGetClient, apiPostClient, getSession } from "@/services/api";
+import { goalVisualState, type OperationalGoalAlert, uniqueOperationalGoal } from "@/lib/operational-goals";
+import type { WorkflowEntry } from "@/lib/operational-workflow";
+import { resolveExplicitWeekId } from "@/lib/week-selection";
+import { apiGetClient, apiPostClient, DEMO_MODE, getSession } from "@/services/api";
 
 interface WeekRow {
   id: string;
@@ -20,7 +26,7 @@ interface LossTypeRow {
   name: string;
 }
 
-interface LossEntryRow {
+interface LossEntryRow extends WorkflowEntry {
   id: string;
   date: string;
   quantityKg: string | number;
@@ -40,6 +46,7 @@ export default function LossesPage() {
   const [types, setTypes] = useState<LossTypeRow[]>([]);
   const [entries, setEntries] = useState<LossEntryRow[]>([]);
   const [products, setProducts] = useState<ProductRow[]>([]);
+  const [alerts, setAlerts] = useState<OperationalGoalAlert[]>([]);
   const [weekId, setWeekId] = useState("");
   const [lossTypeId, setLossTypeId] = useState("");
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
@@ -60,26 +67,46 @@ export default function LossesPage() {
     }
     setLoading(true);
     try {
+      if (DEMO_MODE) {
+        setWeeks([demoWorkflowWeek]);
+        setTypes(demoWorkflowLossTypes);
+        setProducts(demoWorkflowProducts);
+        setWeekId(demoWorkflowWeek.id);
+        setLossTypeId((current) => current || demoWorkflowLossTypes[0]?.id || "");
+        setEntries((current) => current.length ? current : createDemoLossEntries());
+        setAlerts(demoDashboardAlerts);
+        setMessage("Perdas demonstrativas carregadas; o workflow funciona localmente.");
+        return;
+      }
       const [weekRows, typeRows, productRows] = await Promise.all([
         apiGetClient<WeekRow[]>("/weeks"),
         apiGetClient<LossTypeRow[]>("/losses/types"),
         apiGetClient<ProductRow[]>("/products?active=true")
       ]);
-      const selectedWeek = requestedWeek || weekRows.find((week) => week.status !== "CLOSED" && week.status !== "ARCHIVED")?.id || weekRows[0]?.id || "";
+      const selectedWeek = resolveExplicitWeekId(weekRows, requestedWeek);
       setWeeks(weekRows);
       setTypes(typeRows);
       setProducts(productRows);
       setWeekId(selectedWeek);
       setLossTypeId((current) => current || typeRows[0]?.id || "");
       if (selectedWeek) {
-        const lossRows = await apiGetClient<LossEntryRow[]>(`/losses?weekId=${selectedWeek}`);
+        const [lossRows, nextAlerts] = await Promise.all([
+          apiGetClient<LossEntryRow[]>(`/losses?weekId=${encodeURIComponent(selectedWeek)}`),
+          apiGetClient<OperationalGoalAlert[]>(`/dashboard/alerts?weekId=${encodeURIComponent(selectedWeek)}`)
+        ]);
         setEntries(lossRows);
+        setAlerts(nextAlerts);
+        setMessage("Perdas carregadas da API.");
+      } else {
+        setEntries([]);
+        setAlerts([]);
+        setMessage(weekRows.length ? "Selecione uma semana para carregar as perdas." : "Nenhuma semana operacional cadastrada.");
       }
-      setMessage("Perdas carregadas da API.");
     } catch (error) {
       setWeeks([]);
       setTypes([]);
       setEntries([]);
+      setAlerts([]);
       setMessage(error instanceof Error ? error.message : "Nao foi possivel carregar perdas da API.");
     } finally {
       setLoading(false);
@@ -95,6 +122,27 @@ export default function LossesPage() {
       setMessage("Entre no sistema e selecione semana/tipo para salvar.");
       return;
     }
+    if (DEMO_MODE) {
+      const selectedType = types.find((type) => type.id === lossTypeId);
+      const selectedProduct = products.find((product) => product.id === productId);
+      const demoEntry: LossEntryRow = {
+        id: `demo-loss-${Date.now()}`,
+        date: `${date}T00:00:00.000Z`,
+        quantityKg,
+        reason,
+        sector: { code: sector },
+        lossType: selectedType,
+        product: selectedProduct ? { code: selectedProduct.code, name: selectedProduct.name } : null,
+        lossCost: quantityKg * 5.6,
+        filmUsedKg: 0,
+        financialResult: -(quantityKg * 5.6),
+        workflowStatus: "DRAFT",
+        version: 1
+      };
+      setEntries((current) => [demoEntry, ...current]);
+      setMessage("Rascunho de perda criado localmente. Use Enviar para iniciar a aprovação demonstrativa.");
+      return;
+    }
     setLoading(true);
     try {
       await apiPostClient("/losses", { weekId, date, sector, productId: productId || undefined, lossTypeId, quantityKg, packedBoxes, reason });
@@ -108,6 +156,8 @@ export default function LossesPage() {
   }
 
   const total = entries.reduce((sum, entry) => sum + Number(entry.quantityKg), 0);
+  const lossGoal = goalVisualState(alerts, ["losses_kg", "loss"], formatKg);
+  const uniqueLossGoal = uniqueOperationalGoal(alerts, ["losses_kg", "loss"]);
   const rows = entries.length
     ? entries.map((entry) => ({
         Data: entry.date.slice(0, 10),
@@ -118,16 +168,32 @@ export default function LossesPage() {
         Custo: formatCurrency(Number(entry.lossCost ?? 0)),
         "Filme aproveitado": formatKg(Number(entry.filmUsedKg ?? 0)),
         Resultado: formatCurrency(Number(entry.financialResult ?? 0)),
-        Motivo: entry.reason ?? "-"
+        Motivo: entry.reason ?? "-",
+        Fluxo: (
+          <EntryWorkflowActions
+            entry={entry}
+            resource="losses"
+            roles={session?.user.roles ?? []}
+            actorId={session?.user.id}
+            demo={DEMO_MODE}
+            disabled={loading}
+            onChanged={async (updated) => {
+              if (DEMO_MODE) setEntries((current) => current.map((item) => item.id === updated.id ? updated : item));
+              else await loadData(weekId);
+            }}
+            onReload={() => loadData(weekId)}
+            onMessage={setMessage}
+          />
+        )
       }))
-    : [{ Data: "-", Setor: "-", Tipo: "Nenhuma perda carregada.", Produto: "-", Quantidade: "-", Custo: "-", "Filme aproveitado": "-", Resultado: "-", Motivo: "-" }];
+    : [{ Data: "-", Setor: "-", Tipo: "Nenhuma perda carregada.", Produto: "-", Quantidade: "-", Custo: "-", "Filme aproveitado": "-", Resultado: "-", Motivo: "-", Fluxo: <span>-</span> }];
 
   return (
     <div className="space-y-6">
       <PageHeader title="Controle de perdas" description="Registre perdas e calcule custo, filme aproveitado e resultado financeiro da embalagem." />
       <Card>
         <div className="grid gap-4 md:grid-cols-5">
-          <Select label="Semana" value={weekId} onChange={setWeekId} options={weeks.map((week) => ({ value: week.id, label: `${week.label} - ${week.status}` }))} />
+          <Select label="Semana" value={weekId} onChange={(value) => { setWeekId(value); void loadData(value); }} options={weeks.map((week) => ({ value: week.id, label: `${week.label} - ${week.status}` }))} />
           <Select label="Tipo" value={lossTypeId} onChange={setLossTypeId} options={types.map((type) => ({ value: type.id, label: type.name }))} />
           <Select label="Setor" value={sector} onChange={(value) => setSector(value as "P1" | "P2")} options={[{ value: "P1", label: "P1" }, { value: "P2", label: "P2" }]} />
           <Select label="Produto (para custo)" value={productId} onChange={setProductId} options={[{ value: "", label: "Não informado" }, ...products.filter((product) => !product.defaultSector || product.defaultSector.code === sector).map((product) => ({ value: product.id, label: `${product.code} - ${product.name}` }))]} />
@@ -149,9 +215,9 @@ export default function LossesPage() {
         <p className="mt-4 text-sm text-slate-300">{message}</p>
       </Card>
       <div className="grid gap-4 md:grid-cols-3">
-        <StatCard label="Perdas da semana" value={formatKg(total)} status={total > 50 ? "ATTENTION" : "OK"} />
+        <StatCard label="Perdas da semana" value={formatKg(total)} hint={lossGoal.hint} status={lossGoal.status} />
         <StatCard label="Registros" value={String(entries.length)} />
-        <StatCard label="Meta semanal" value="< 50 kg" status={total > 50 ? "ATTENTION" : "OK"} />
+        <StatCard label="Meta semanal" value={uniqueLossGoal ? formatKg(uniqueLossGoal.target) : "Não definida"} hint={lossGoal.hint} status={lossGoal.status} />
       </div>
       <DataTable title="Perdas" rows={rows} />
     </div>

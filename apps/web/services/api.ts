@@ -1,7 +1,8 @@
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "/api";
 export const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
-export const DEMO_ADMIN_EMAIL = process.env.NEXT_PUBLIC_DEMO_ADMIN_EMAIL ?? "admin@nexus.local";
-export const DEMO_ADMIN_PASSWORD = process.env.NEXT_PUBLIC_DEMO_ADMIN_PASSWORD ?? "";
+// Credenciais publicas e exclusivas do preview estatico. Elas nunca autenticam na API operacional.
+export const DEMO_ADMIN_EMAIL = process.env.NEXT_PUBLIC_DEMO_ADMIN_EMAIL ?? "admin@demo.nexus.local";
+export const DEMO_ADMIN_PASSWORD = process.env.NEXT_PUBLIC_DEMO_ADMIN_PASSWORD ?? "NexusDemo@2026";
 
 const sessionStorageKey = "nexus-session-user";
 
@@ -26,6 +27,20 @@ export const DEMO_SESSION: SessionData = {
 };
 
 let currentSession: SessionData | null = null;
+
+export class ApiClientError extends Error {
+  constructor(
+    message: string,
+    readonly status: number
+  ) {
+    super(message);
+    this.name = "ApiClientError";
+  }
+}
+
+export function isApiConflict(error: unknown): error is ApiClientError {
+  return error instanceof ApiClientError && error.status === 409;
+}
 
 async function parseError(response: Response, fallback: string) {
   const body = await response.json().catch(() => null);
@@ -69,7 +84,7 @@ export async function apiPostClient<T>(path: string, payload: unknown): Promise<
 
   if (!response.ok) {
     if (response.status === 401) clearSession();
-    throw new Error(await parseError(response, "Nao foi possivel concluir a operacao."));
+    throw new ApiClientError(await parseError(response, "Nao foi possivel concluir a operacao."), response.status);
   }
 
   return (await response.json()) as T;

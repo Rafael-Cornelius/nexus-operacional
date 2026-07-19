@@ -4,9 +4,10 @@ import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { PrismaService } from "../../infrastructure/database/prisma.service";
 import { CurrentUser } from "../../infrastructure/security/current-user";
+import { AuditService } from "../audit/audit.service";
 
 const loginSchema = z.object({
-  email: z.string().email(),
+  email: z.string().trim().email().transform((value) => value.toLowerCase()),
   password: z.string().min(1)
 });
 
@@ -14,7 +15,8 @@ const loginSchema = z.object({
 export class AuthService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly jwt: JwtService
+    private readonly jwt: JwtService,
+    private readonly audit: AuditService
   ) {}
 
   async login(payload: unknown) {
@@ -41,7 +43,11 @@ export class AuthService {
     });
 
     const roles = user.roles.map((item) => item.role.code);
-    const accessToken = await this.jwt.signAsync({ sub: user.id, email: user.email, roles });
+    const accessToken = await this.jwt.signAsync({
+      sub: user.id,
+      email: user.email,
+      sv: user.sessionVersion
+    });
     await this.recordAuthEvent("login", user.id, { email: user.email, roles });
 
     return {
@@ -62,7 +68,14 @@ export class AuthService {
 
     const user = await this.prisma.user.findUnique({
       where: { id: currentUser.id },
-      include: { roles: { include: { role: true } } }
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        active: true,
+        deletedAt: true,
+        roles: { select: { role: { select: { code: true } } } }
+      }
     });
 
     if (!user || !user.active || user.deletedAt) {
@@ -85,15 +98,13 @@ export class AuthService {
   }
 
   private async recordAuthEvent(action: "login" | "login_failed" | "logout", userId: string | undefined, after: unknown) {
-    await this.prisma.auditLog.create({
-      data: {
-        userId,
-        module: "auth",
-        action,
-        entity: "User",
-        entityId: userId,
-        after: after as object
-      }
+    await this.audit.record({
+      userId,
+      module: "auth",
+      action,
+      entity: "User",
+      entityId: userId,
+      after
     });
   }
 }

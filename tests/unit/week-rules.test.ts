@@ -45,4 +45,20 @@ describe("operational week rules", () => {
     expect(weeklyPeriod.findFirst).not.toHaveBeenCalled();
     expect(weeklyPeriod.upsert).not.toHaveBeenCalled();
   });
+
+  it("refuses to close a week while operational records await approval", async () => {
+    const prisma = {
+      weeklyPeriod: {
+        findUnique: vi.fn().mockResolvedValue({ id: "open-week", status: "OPEN", deletedAt: null })
+      },
+      productionEntry: { count: vi.fn().mockResolvedValue(2) },
+      lossEntry: { count: vi.fn().mockResolvedValue(1) },
+      downtimeEntry: { count: vi.fn().mockResolvedValue(0) },
+      dashboardSnapshot: { create: vi.fn() }
+    };
+    const service = new WeeksService(prisma as never, { record: vi.fn() } as never);
+
+    await expect(service.close("open-week")).rejects.toThrow("3 lancamento(s) sem aprovacao");
+    expect(prisma.dashboardSnapshot.create).not.toHaveBeenCalled();
+  });
 });

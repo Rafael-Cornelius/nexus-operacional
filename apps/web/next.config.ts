@@ -1,6 +1,8 @@
 import type { NextConfig } from "next";
+import path from "node:path";
 
 const staticDemo = process.env.NEXUS_STATIC_DEMO === "true";
+const apiInternalUrl = (process.env.API_INTERNAL_URL ?? "http://127.0.0.1:3333").replace(/\/+$/, "");
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
@@ -11,15 +13,19 @@ const nextConfig: NextConfig = {
         trailingSlash: true,
         images: { unoptimized: true }
       }
-    : {}),
-  devIndicators: false,
-  experimental: {
-    optimizePackageImports: ["lucide-react", "echarts-for-react"]
-  },
-  webpack(config) {
-    config.cache = false;
-    return config;
-  }
+    : {
+        output: "standalone" as const,
+        outputFileTracingRoot: path.resolve(process.cwd(), "../.."),
+        async rewrites() {
+          return [
+            {
+              source: "/api/:path*",
+              destination: `${apiInternalUrl}/api/:path*`
+            }
+          ];
+        }
+      }),
+  devIndicators: false
 };
 
 export default nextConfig;

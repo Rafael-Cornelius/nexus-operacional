@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../../infrastructure/database/prisma.service";
 import { productPricePeriodSchema, productSchema } from "../../domain/validators/schemas";
 import { AuditService } from "../audit/audit.service";
@@ -131,17 +131,32 @@ export class ProductsService {
     const product = await this.prisma.product.findUnique({ where: { id: productId } });
     if (!product || product.deletedAt) throw new NotFoundException("Produto nao encontrado.");
 
+    const overlapping = await this.prisma.productPricePeriod.findFirst({
+      where: {
+        productId,
+        startsOn: input.endsOn ? { lte: input.endsOn } : undefined,
+        OR: [{ endsOn: null }, { endsOn: { gte: input.startsOn } }]
+      }
+    });
+    if (overlapping) {
+      throw new BadRequestException("O periodo de preco se sobrepoe a uma vigencia existente deste produto.");
+    }
+
     const period = await this.prisma.productPricePeriod.create({
       data: { productId, ...input }
     });
-    await this.prisma.product.update({
-      where: { id: productId },
-      data: {
-        pricePerKg: input.pricePerKg,
-        filmCostPerKg: input.filmCostPerKg,
-        updatedBy: this.safeUserId(user)
-      }
-    });
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+    if (input.startsOn <= today && (!input.endsOn || input.endsOn >= today)) {
+      await this.prisma.product.update({
+        where: { id: productId },
+        data: {
+          pricePerKg: input.pricePerKg,
+          filmCostPerKg: input.filmCostPerKg,
+          updatedBy: this.safeUserId(user)
+        }
+      });
+    }
     await this.audit.record({
       userId: this.safeUserId(user),
       module: "products",

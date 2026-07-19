@@ -57,8 +57,11 @@ export const demoDashboardComparison = {
 };
 
 export const demoDashboardAlerts = [
-  { goalId: "demo-goal-1", name: "Perdas totais", value: 42, target: 45, status: "OK", action: "Manter acompanhamento diário." },
-  { goalId: "demo-goal-2", name: "Tempo parado", value: 64, target: 55, status: "ATTENTION", action: "Revisar espera por massa e tempo de setup." }
+  { goalId: "demo-goal-0", name: "Produção total", metric: "produced_kg", value: 18420, target: 17500, comparator: ">=", status: "OK", action: "Manter acompanhamento diário." },
+  { goalId: "demo-goal-1", name: "Perdas totais", metric: "losses_kg", value: 42, target: 45, comparator: "<=", status: "OK", action: "Manter acompanhamento diário." },
+  { goalId: "demo-goal-3", name: "Sobrepeso", metric: "overweight", value: 0.0015, target: 0.002, comparator: "<=", status: "OK", action: "Manter acompanhamento diário." },
+  { goalId: "demo-goal-4", name: "Rendimento", metric: "yield", value: 0.972, target: 0.95, comparator: ">=", status: "OK", action: "Manter acompanhamento diário." },
+  { goalId: "demo-goal-2", name: "Tempo parado", metric: "downtime_minutes", value: 64, target: 55, comparator: "<=", status: "ATTENTION", action: "Revisar espera por massa e tempo de setup." }
 ];
 
 export function createDemoExecutiveDeck() {

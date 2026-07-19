@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
-import { evaluateRule } from "../../domain/alerts/alert-engine";
 import { PrismaService } from "../../infrastructure/database/prisma.service";
+import { GoalsService } from "../goals/goals.service";
 
 function n(value: unknown): number {
   return Number(value ?? 0);
@@ -14,12 +14,15 @@ function comparisonMetric(label: string, key: MetricKey, improvesWhen: "up" | "d
 
 @Injectable()
 export class DashboardService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly goals: GoalsService
+  ) {}
 
   async kpis(weekId?: string) {
     const [production, registeredLosses, downtime, weeks, sectors, productionBySector, lossesBySector, packaging] = await Promise.all([
       this.prisma.productionEntry.aggregate({
-        where: { deletedAt: null, weekId },
+        where: { deletedAt: null, workflowStatus: "APPROVED", weekId },
         _sum: {
           producedKg: true,
           weighingLossKg: true,
@@ -32,11 +35,11 @@ export class DashboardService {
         _count: true
       }),
       this.prisma.lossEntry.aggregate({
-        where: { deletedAt: null, weekId },
+        where: { deletedAt: null, workflowStatus: "APPROVED", weekId },
         _sum: { quantityKg: true, lossCost: true, filmUsedKg: true, filmUsedValue: true, financialResult: true }
       }),
       this.prisma.downtimeEntry.aggregate({
-        where: { deletedAt: null, weekId },
+        where: { deletedAt: null, workflowStatus: "APPROVED", weekId },
         _sum: { stoppedMinutes: true },
         _avg: { stoppedPercent: true, realKgHour: true, possibleKgHour: true }
       }),
@@ -44,16 +47,16 @@ export class DashboardService {
       this.prisma.sector.findMany(),
       this.prisma.productionEntry.groupBy({
         by: ["sectorId"],
-        where: { deletedAt: null, weekId },
+        where: { deletedAt: null, workflowStatus: "APPROVED", weekId },
         _sum: { producedKg: true, weighingLossKg: true, overweightTotalKg: true, productionCost: true, lossesCost: true, overweightCost: true }
       }),
       this.prisma.lossEntry.groupBy({
         by: ["sectorId"],
-        where: { deletedAt: null, weekId },
+        where: { deletedAt: null, workflowStatus: "APPROVED", weekId },
         _sum: { quantityKg: true, lossCost: true }
       }),
       this.prisma.lossEntry.aggregate({
-        where: { deletedAt: null, weekId, lossType: { code: "PACKAGING" } },
+        where: { deletedAt: null, workflowStatus: "APPROVED", weekId, lossType: { code: "PACKAGING" } },
         _sum: { quantityKg: true, lossCost: true, filmUsedKg: true, filmUsedValue: true, financialResult: true }
       })
     ]);
@@ -115,19 +118,19 @@ export class DashboardService {
     const [bySector, sectors, downtime, reasons, losses] = await Promise.all([
       this.prisma.productionEntry.groupBy({
         by: ["sectorId"],
-        where: { deletedAt: null, weekId },
+        where: { deletedAt: null, workflowStatus: "APPROVED", weekId },
         _sum: { producedKg: true, weighingLossKg: true, overweightTotalKg: true }
       }),
       this.prisma.sector.findMany(),
       this.prisma.downtimeEntry.groupBy({
         by: ["downtimeReasonId"],
-        where: { deletedAt: null, weekId },
+        where: { deletedAt: null, workflowStatus: "APPROVED", weekId },
         _sum: { stoppedMinutes: true }
       }),
       this.prisma.downtimeReason.findMany(),
       this.prisma.lossEntry.groupBy({
         by: ["lossTypeId"],
-        where: { deletedAt: null, weekId },
+        where: { deletedAt: null, workflowStatus: "APPROVED", weekId },
         _sum: { quantityKg: true, lossCost: true }
       })
     ]);
@@ -184,25 +187,7 @@ export class DashboardService {
   }
 
   async alerts(weekId?: string) {
-    const [goals, data] = await Promise.all([
-      this.prisma.goal.findMany({ where: { deletedAt: null, active: true }, orderBy: { metric: "asc" } }),
-      this.kpis(weekId)
-    ]);
-    const values: Record<string, number> = {
-      yield: data.averageYield,
-      overweight: data.overweightPercent,
-      losses_kg: data.lossesTotalKg,
-      loss: data.lossesTotalKg,
-      downtime_minutes: data.stoppedMinutes,
-      downtime: data.stoppedPercent,
-      produced_kg: data.productionTotalKg
-    };
-    return goals.map((goal) => {
-      const value = values[goal.metric] ?? 0;
-      const metric = goal.metric === "yield" ? "yield" : goal.metric.startsWith("downtime") ? "downtime" : goal.metric.startsWith("overweight") ? "overweight" : "loss";
-      const alert = evaluateRule({ metric, value, target: n(goal.targetValue) });
-      return { goalId: goal.id, name: goal.name, metric: goal.metric, value, target: n(goal.targetValue), comparator: goal.comparator, status: alert.status, action: alert.action };
-    });
+    return this.goals.activeAlerts(weekId);
   }
 
   health() {

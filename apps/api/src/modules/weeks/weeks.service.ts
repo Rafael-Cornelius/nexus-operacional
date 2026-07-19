@@ -72,6 +72,17 @@ export class WeeksService {
     const current = await this.prisma.weeklyPeriod.findUnique({ where: { id } });
     if (!current) throw new NotFoundException("Semana nao encontrada.");
     assertWeekWritable(current, "Somente semanas abertas ou em revisao podem ser fechadas.");
+    const [pendingProduction, pendingLosses, pendingDowntimes] = await Promise.all([
+      this.prisma.productionEntry.count({ where: { weekId: id, deletedAt: null, workflowStatus: { not: "APPROVED" } } }),
+      this.prisma.lossEntry.count({ where: { weekId: id, deletedAt: null, workflowStatus: { not: "APPROVED" } } }),
+      this.prisma.downtimeEntry.count({ where: { weekId: id, deletedAt: null, workflowStatus: { not: "APPROVED" } } })
+    ]);
+    const pending = pendingProduction + pendingLosses + pendingDowntimes;
+    if (pending > 0) {
+      throw new BadRequestException(
+        `Semana possui ${pending} lancamento(s) sem aprovacao: producao ${pendingProduction}, perdas ${pendingLosses}, paradas ${pendingDowntimes}.`
+      );
+    }
     const snapshot = await this.captureSnapshot(id, "closed");
     const week = await this.prisma.weeklyPeriod.update({
       where: { id },
@@ -124,17 +135,17 @@ export class WeeksService {
   private async captureSnapshot(weekId: string, reason: "closed" | "archived") {
     const [productionEntries, losses, downtimes] = await Promise.all([
       this.prisma.productionEntry.findMany({
-        where: { weekId, deletedAt: null },
+        where: { weekId, deletedAt: null, workflowStatus: "APPROVED" },
         include: { product: { select: { code: true, name: true } }, sector: { select: { code: true } } },
         orderBy: [{ date: "asc" }, { createdAt: "asc" }]
       }),
       this.prisma.lossEntry.findMany({
-        where: { weekId, deletedAt: null },
+        where: { weekId, deletedAt: null, workflowStatus: "APPROVED" },
         include: { lossType: { select: { code: true, name: true } }, product: { select: { code: true, name: true } }, sector: { select: { code: true } } },
         orderBy: [{ date: "asc" }, { createdAt: "asc" }]
       }),
       this.prisma.downtimeEntry.findMany({
-        where: { weekId, deletedAt: null },
+        where: { weekId, deletedAt: null, workflowStatus: "APPROVED" },
         include: { reason: { select: { name: true } }, sector: { select: { code: true } }, line: { select: { code: true, name: true } } },
         orderBy: [{ date: "asc" }, { createdAt: "asc" }]
       })

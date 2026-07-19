@@ -6,6 +6,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { DataTable } from "@/components/tables/data-table";
 import { Button } from "@/components/ui/button";
 import { Card, StatCard } from "@/components/ui/card";
+import { resolveExplicitWeekId } from "@/lib/week-selection";
 import { apiGetClient, apiPostClient, getSession } from "@/services/api";
 
 interface GoalRow {
@@ -46,13 +47,12 @@ export default function GoalsPage() {
     if (!session) return;
     setLoading(true);
     try {
-      const [data, weekRows] = await Promise.all([
-        apiGetClient<GoalRow[]>(`/goals${nextWeekId ? `?weekId=${nextWeekId}` : ""}`),
-        apiGetClient<WeekRow[]>("/weeks")
-      ]);
+      const weekRows = await apiGetClient<WeekRow[]>("/weeks");
+      const selectedWeek = resolveExplicitWeekId(weekRows, nextWeekId);
+      const data = await apiGetClient<GoalRow[]>(`/goals${selectedWeek ? `?weekId=${encodeURIComponent(selectedWeek)}` : ""}`);
       setGoals(data);
       setWeeks(weekRows);
-      setWeekId((current) => current || weekRows.find((week) => week.status === "OPEN" || week.status === "REVIEW")?.id || weekRows[0]?.id || "");
+      setWeekId(selectedWeek);
       setMessage(data.length ? `${data.length} meta(s) carregada(s) da API.` : "Nenhuma meta cadastrada.");
     } catch (error) {
       setGoals([]);

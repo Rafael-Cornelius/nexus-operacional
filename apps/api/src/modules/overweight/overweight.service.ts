@@ -8,7 +8,7 @@ export class OverweightService {
   async ranking(weekId?: string) {
     const rows = await this.prisma.productionEntry.groupBy({
       by: ["productId"],
-      where: { deletedAt: null, weekId },
+      where: { deletedAt: null, workflowStatus: "APPROVED", weekId },
       _sum: { overweightTotalKg: true, producedKg: true },
       orderBy: { _sum: { overweightTotalKg: "desc" } },
       take: 10

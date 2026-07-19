@@ -1,5 +1,7 @@
 # Relatorio de lacunas de implementacao
 
+> Documento historico preservado como retrato da auditoria de 2026-05-26. Para o estado vigente, consulte [`../current-status.md`](../current-status.md).
+
 Data da auditoria: 2026-05-26
 
 ## Escopo lido
