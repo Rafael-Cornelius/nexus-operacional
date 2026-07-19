@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -30,6 +30,46 @@ async function backupFixture() {
 }
 
 describe("backups service", () => {
+  it("creates encrypted primary and checksum-matched external copies", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "nexus-backup-create-"));
+    temporaryDirectories.push(directory);
+    const primary = join(directory, "primary");
+    const external = join(directory, "external");
+    const transaction = {
+      $queryRaw: vi.fn().mockResolvedValue([{ table_name: "users" }]),
+      $queryRawUnsafe: vi.fn().mockResolvedValue([{ id: "user-1", email: "private@example.com" }])
+    };
+    const backupCreate = vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({
+      id: "9f57f108-1e84-49c1-a39b-dff31dc07ca7",
+      ...data,
+      createdAt: new Date("2026-07-19T12:00:00.000Z")
+    }));
+    const prisma = {
+      $transaction: vi.fn(async (operation: (client: typeof transaction) => Promise<unknown>) => operation(transaction)),
+      backup: { create: backupCreate }
+    };
+    const settings: Record<string, string> = {
+      BACKUP_DIR: primary,
+      BACKUP_EXTERNAL_DIR: external,
+      BACKUP_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64"),
+      BACKUP_ENCRYPTION_KEY_ID: "key-2026-07"
+    };
+    const service = new BackupsService(prisma as never, { get: vi.fn((key: string) => settings[key]) } as never, { record: vi.fn() } as never);
+
+    const result = await service.create();
+    const primaryBytes = await readFile(join(primary, result.fileName));
+    const externalBytes = await readFile(join(external, result.fileName));
+    expect(result).toMatchObject({ encrypted: true, externalStored: true });
+    expect(result.fileName).toMatch(/\.nxb$/);
+    expect(primaryBytes.equals(externalBytes)).toBe(true);
+    expect(primaryBytes.toString("utf8")).not.toContain("private@example.com");
+    expect(JSON.parse(primaryBytes.toString("utf8"))).toMatchObject({
+      format: "nexus-encrypted-backup-v1",
+      algorithm: "aes-256-gcm",
+      keyId: "key-2026-07"
+    });
+  });
+
   it("serializes BigInt sizes before returning backup rows", async () => {
     const createdAt = new Date("2026-05-25T10:00:00.000Z");
     const prisma = {

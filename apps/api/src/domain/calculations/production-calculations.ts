@@ -4,6 +4,7 @@ import {
   ProductWeightConfig
 } from "./types";
 import { asFiniteNumber, nonNegative, round, safeDivide } from "./safe-number";
+import { CALCULATION_RULE_IDS, calculationRuleVersions } from "./rule-registry";
 
 export function calculateProducedKg(boxes: number, config: ProductWeightConfig): number {
   const packedBoxes = nonNegative(asFiniteNumber(boxes));
@@ -21,6 +22,19 @@ export function calculateExpectedYieldKg(
   usedReworkKg = 0
 ): number {
   return round(nonNegative(realizedBatches) * nonNegative(massWeightKg) + nonNegative(usedReworkKg), 3);
+}
+
+export function calculatePlanPerformance(plannedBatches: number, realizedBatches: number) {
+  const planned = nonNegative(asFiniteNumber(plannedBatches));
+  const realized = nonNegative(asFiniteNumber(realizedBatches));
+  return {
+    planAttainmentPercent: round(safeDivide(realized, planned), 6),
+    planDifferenceBatches: round(realized - planned, 3),
+    calculationRuleVersions: calculationRuleVersions(
+      CALCULATION_RULE_IDS.planAttainment,
+      CALCULATION_RULE_IDS.planDifference
+    )
+  };
 }
 
 export function calculateOverweight(
@@ -58,6 +72,7 @@ export function calculateProductionEntry(input: ProductionCalculationInput): Pro
     usedReworkKg
   );
   const realYieldPercent = round(safeDivide(producedKg, expectedYieldKg), 6);
+  const plan = calculatePlanPerformance(plannedBatches, realizedBatches);
   const overweight = calculateOverweight(
     producedKg,
     packedBoxes,
@@ -72,6 +87,9 @@ export function calculateProductionEntry(input: ProductionCalculationInput): Pro
   if (expectedYieldKg === 0 && producedKg > 0) {
     inconsistencies.push("Producao informada sem rendimento esperado calculavel.");
   }
+  if (plannedBatches === 0 && realizedBatches > 0) {
+    inconsistencies.push("Realizado informado sem plano calculavel.");
+  }
   if (input.weightConfig.targetPackageWeightG <= 0) {
     inconsistencies.push("Produto sem peso alvo de pacote valido.");
   }
@@ -83,11 +101,27 @@ export function calculateProductionEntry(input: ProductionCalculationInput): Pro
     producedKg,
     expectedYieldKg,
     realYieldPercent,
+    planAttainmentPercent: plan.planAttainmentPercent,
+    planDifferenceBatches: plan.planDifferenceBatches,
     packageCount: overweight.packageCount,
     overweightGPerPackage: overweight.overweightGPerPackage,
     overweightTotalKg: overweight.overweightTotalKg,
     overweightPercent: overweight.overweightPercent,
     totalLossesKg: round(weighingLossKg + generatedReworkKg + overweight.overweightTotalKg, 3),
-    inconsistencies
+    inconsistencies,
+    calculationRuleVersions: calculationRuleVersions(
+      input.weightConfig.formula === "PACKAGE_WEIGHT"
+        ? CALCULATION_RULE_IDS.producedKgPackage
+        : CALCULATION_RULE_IDS.producedKgBox,
+      CALCULATION_RULE_IDS.expectedYieldKg,
+      CALCULATION_RULE_IDS.realYield,
+      CALCULATION_RULE_IDS.planAttainment,
+      CALCULATION_RULE_IDS.planDifference,
+      CALCULATION_RULE_IDS.packageCount,
+      CALCULATION_RULE_IDS.overweightUnit,
+      CALCULATION_RULE_IDS.overweightTotal,
+      CALCULATION_RULE_IDS.overweightPercent,
+      CALCULATION_RULE_IDS.totalLosses
+    )
   };
 }

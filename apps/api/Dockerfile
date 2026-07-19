@@ -6,10 +6,11 @@ RUN npm ci
 
 FROM node:22-alpine AS builder
 WORKDIR /app
-ENV DATABASE_URL=postgresql://nexus:nexus@postgres:5432/nexus_operacional?schema=public
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-RUN npx prisma generate
+# Prisma Client generation parses the datasource but never connects to it.
+# This passwordless, build-only URL is scoped to this RUN layer.
+RUN DATABASE_URL=postgresql://localhost/prisma-generate npx prisma generate
 RUN npm run build --workspace=@nexus/api
 
 FROM node:22-alpine AS runner

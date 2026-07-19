@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { chmod, mkdir, readFile, realpath, stat, unlink, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, readFile, realpath, stat, unlink, writeFile } from "node:fs/promises";
 import { basename, isAbsolute, resolve, sep } from "node:path";
 import { BadRequestException, Injectable, InternalServerErrorException, NotFoundException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
@@ -7,6 +7,7 @@ import { Prisma, type Backup } from "@prisma/client";
 import { PrismaService } from "../../infrastructure/database/prisma.service";
 import { CurrentUser } from "../../infrastructure/security/current-user";
 import { AuditService } from "../audit/audit.service";
+import { decryptBackupEnvelope, encryptBackupPayload, isEncryptedBackupEnvelope, parseBackupEncryptionKey } from "./backup-encryption";
 
 interface BackupQuery {
   status?: string;
@@ -30,6 +31,8 @@ interface VerifiedSnapshot {
   snapshot: BackupSnapshot;
   tableCount: number;
   rowCount: number;
+  encrypted: boolean;
+  storage: "primary" | "external";
 }
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -75,7 +78,7 @@ export class BackupsService {
   async create(user?: CurrentUser) {
     const backupDir = this.config.get<string>("BACKUP_DIR")?.trim() || "./backups";
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const fileName = `nexus-backup-${timestamp}.json`;
+    const fileName = `nexus-backup-${timestamp}.nxb`;
     const filePath = `${backupDir.replace(/[\\/]+$/, "")}/${fileName}`;
     const fullPath = resolve(process.cwd(), backupDir, fileName);
     const createdBy = user?.id && uuidPattern.test(user.id) ? user.id : undefined;
@@ -84,12 +87,19 @@ export class BackupsService {
       await mkdir(resolve(process.cwd(), backupDir), { recursive: true, mode: 0o700 });
       await chmod(resolve(process.cwd(), backupDir), 0o700);
       const snapshot = await this.buildSnapshot();
-      const payload = JSON.stringify(snapshot, this.jsonReplacer, 2);
+      const key = parseBackupEncryptionKey(this.config.get<string>("BACKUP_ENCRYPTION_KEY"));
+      const envelope = encryptBackupPayload(
+        JSON.stringify(snapshot, this.jsonReplacer),
+        key,
+        this.config.get<string>("BACKUP_ENCRYPTION_KEY_ID")?.trim() || "primary"
+      );
+      const payload = JSON.stringify(envelope);
       await writeFile(fullPath, payload, { encoding: "utf8", flag: "wx", mode: 0o600 });
       await chmod(fullPath, 0o600);
 
       const [fileBuffer, fileStat] = await Promise.all([readFile(fullPath), stat(fullPath)]);
       const checksum = createHash("sha256").update(fileBuffer).digest("hex");
+      const externalPath = await this.copyToExternalStorage(fullPath, fileName, checksum);
 
       const backup = await this.prisma.backup.create({
         data: {
@@ -107,10 +117,10 @@ export class BackupsService {
         action: "create",
         entity: "Backup",
         entityId: backup.id,
-        after: this.toDto(backup)
+        after: { ...this.toDto(backup), encrypted: true, externalStored: Boolean(externalPath) }
       });
 
-      return this.toDto(backup);
+      return { ...this.toDto(backup), encrypted: true, externalStored: Boolean(externalPath) };
     } catch (error) {
       await this.recordFailedBackup(filePath, createdBy, user, error);
       throw new InternalServerErrorException("Nao foi possivel gerar o backup do banco.");
@@ -125,7 +135,9 @@ export class BackupsService {
       generatedAt: verified.snapshot.generatedAt,
       tableCount: verified.tableCount,
       rowCount: verified.rowCount,
-      checksumValid: true
+      checksumValid: true,
+      encrypted: verified.encrypted,
+      storage: verified.storage
     };
 
     await this.audit.record({
@@ -220,6 +232,15 @@ export class BackupsService {
         const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
         if (code !== "ENOENT") throw error;
       }
+      const externalPath = this.externalBackupPath(backup.filePath);
+      if (externalPath) {
+        try {
+          await unlink(externalPath);
+        } catch (error) {
+          const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
+          if (code !== "ENOENT") throw error;
+        }
+      }
       await this.prisma.backup.delete({ where: { id: backup.id } });
       removed += 1;
     }
@@ -267,7 +288,15 @@ export class BackupsService {
       throw new BadRequestException("Somente backups concluidos e assinados podem ser verificados.");
     }
 
-    const filePath = await this.resolveBackupFile(backup.filePath, true);
+    let filePath: string;
+    let storage: "primary" | "external" = "primary";
+    try {
+      filePath = await this.resolveBackupFile(backup.filePath, true);
+    } catch (error) {
+      if (!(error instanceof NotFoundException)) throw error;
+      filePath = await this.resolveExternalBackupFile(backup.filePath);
+      storage = "external";
+    }
     const fileStat = await stat(filePath);
     const configuredLimit = Number(this.config.get<string>("BACKUP_MAX_VERIFY_BYTES") ?? 512 * 1024 * 1024);
     const maxBytes = Number.isFinite(configuredLimit) ? Math.max(configuredLimit, 1024) : 512 * 1024 * 1024;
@@ -283,10 +312,21 @@ export class BackupsService {
     } catch {
       throw new BadRequestException("Backup nao contem JSON valido.");
     }
+    let encrypted = false;
+    if (isEncryptedBackupEnvelope(parsed)) {
+      encrypted = true;
+      const key = parseBackupEncryptionKey(this.config.get<string>("BACKUP_ENCRYPTION_KEY"));
+      try {
+        parsed = JSON.parse(decryptBackupEnvelope(parsed, key));
+      } catch (error) {
+        if (error instanceof BadRequestException) throw error;
+        throw new BadRequestException("Conteudo descriptografado do backup nao contem JSON valido.");
+      }
+    }
     const snapshot = this.parseSnapshot(parsed);
     const tableCount = Object.keys(snapshot.tables).length;
     const rowCount = Object.values(snapshot.tables).reduce((total, rows) => total + rows.length, 0);
-    return { backup, filePath, snapshot, tableCount, rowCount };
+    return { backup, filePath, snapshot, tableCount, rowCount, encrypted, storage };
   }
 
   private parseSnapshot(value: unknown): BackupSnapshot {
@@ -339,6 +379,48 @@ export class BackupsService {
       if (error instanceof BadRequestException) throw error;
       throw new NotFoundException("Arquivo fisico do backup nao encontrado.");
     }
+  }
+
+  private externalBackupPath(storedPath: string) {
+    const configuredDir = this.config.get<string>("BACKUP_EXTERNAL_DIR")?.trim();
+    if (!configuredDir) return null;
+    return resolve(process.cwd(), configuredDir, basename(storedPath));
+  }
+
+  private async resolveExternalBackupFile(storedPath: string) {
+    const configuredDir = this.config.get<string>("BACKUP_EXTERNAL_DIR")?.trim();
+    if (!configuredDir) throw new NotFoundException("Arquivo fisico do backup nao encontrado.");
+    const externalRoot = resolve(process.cwd(), configuredDir);
+    const candidate = resolve(externalRoot, basename(storedPath));
+    try {
+      const [realRoot, realFile] = await Promise.all([realpath(externalRoot), realpath(candidate)]);
+      if (realFile !== realRoot && !realFile.startsWith(`${realRoot}${sep}`)) {
+        throw new BadRequestException("Copia externa resolve para fora do diretorio autorizado.");
+      }
+      return realFile;
+    } catch (error) {
+      if (error instanceof BadRequestException) throw error;
+      throw new NotFoundException("Arquivo fisico do backup nao encontrado nos armazenamentos configurados.");
+    }
+  }
+
+  private async copyToExternalStorage(fullPath: string, fileName: string, checksum: string) {
+    const configuredDir = this.config.get<string>("BACKUP_EXTERNAL_DIR")?.trim();
+    if (!configuredDir) return null;
+    const externalRoot = resolve(process.cwd(), configuredDir);
+    const primaryRoot = resolve(process.cwd(), this.config.get<string>("BACKUP_DIR")?.trim() || "./backups");
+    if (externalRoot === primaryRoot) throw new BadRequestException("BACKUP_EXTERNAL_DIR deve ser diferente de BACKUP_DIR.");
+    await mkdir(externalRoot, { recursive: true, mode: 0o700 });
+    await chmod(externalRoot, 0o700);
+    const externalPath = resolve(externalRoot, basename(fileName));
+    await copyFile(fullPath, externalPath);
+    await chmod(externalPath, 0o600);
+    const externalChecksum = createHash("sha256").update(await readFile(externalPath)).digest("hex");
+    if (externalChecksum !== checksum) {
+      await unlink(externalPath).catch(() => undefined);
+      throw new BadRequestException("Copia externa do backup falhou na verificacao de checksum.");
+    }
+    return externalPath;
   }
 
   private async recordFailedBackup(filePath: string, createdBy: string | undefined, user: CurrentUser | undefined, error: unknown) {

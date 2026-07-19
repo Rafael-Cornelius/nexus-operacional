@@ -1,4 +1,4 @@
-import { Controller, Get, Query } from "@nestjs/common";
+import { Body, Controller, Get, Post, Query } from "@nestjs/common";
 import { CurrentUser } from "../../infrastructure/security/current-user";
 import { CurrentUserData } from "../auth/current-user.decorator";
 import { Roles } from "../auth/roles.decorator";
@@ -17,5 +17,10 @@ export class ReportsController {
   @Get("weekly-summary")
   weeklySummary(@Query("weekId") weekId: string | undefined, @CurrentUserData() user?: CurrentUser) {
     return this.reports.weeklySummary(weekId, user);
+  }
+
+  @Post("operational-export")
+  operationalExport(@Body() body: Record<string, string | undefined>, @CurrentUserData() user?: CurrentUser) {
+    return this.reports.operationalExport(body, user);
   }
 }

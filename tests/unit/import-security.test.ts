@@ -272,4 +272,53 @@ describe("XLSX import security", () => {
     expect(create).not.toHaveBeenCalled();
     expect(readdirSync(uploadRoot)).toEqual([]);
   });
+
+  it("creates the upload batch and its audit record in the same transaction", async () => {
+    const workbookPath = join(testDirectory, "valid.xlsx");
+    writeWorkbook(workbookPath, validEntries());
+    const buffer = readFileSync(workbookPath);
+    process.env.IMPORT_UPLOAD_DIR = join(testDirectory, "uploads");
+    const created = {
+      id: "11111111-1111-4111-8111-111111111111",
+      sourceFile: "valid.xlsx",
+      originalFileName: "valid.xlsx",
+      fileHash: "hash",
+      fileSizeBytes: BigInt(buffer.length),
+      status: "STAGED",
+      summary: {},
+      errors: [],
+      _count: { stagingRecords: 0 }
+    };
+    const tx = { importBatch: { create: vi.fn().mockResolvedValue(created) } };
+    const prisma = {
+      $transaction: vi.fn((callback: (client: typeof tx) => unknown) => callback(tx))
+    };
+    const audit = { record: vi.fn().mockResolvedValue({}) };
+    const service = new ImportService(prisma as never, audit as never);
+    vi.spyOn(
+      service as unknown as { runLegacyWorkbookImport(path: string, name: string): Promise<unknown> },
+      "runLegacyWorkbookImport"
+    ).mockResolvedValue({
+      file: "isolated.xlsx",
+      errors: {},
+      legacyData: {
+        products: [], productionEntries: [], lossEntries: [], downtimeEntries: [],
+        importErrors: [], operationalImportErrors: []
+      }
+    });
+
+    await expect(service.uploadWorkbook({
+      originalname: "valid.xlsx",
+      mimetype: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      size: buffer.length,
+      buffer
+    })).resolves.toMatchObject({ id: created.id, status: "STAGED" });
+
+    expect(prisma.$transaction).toHaveBeenCalledOnce();
+    expect(tx.importBatch.create).toHaveBeenCalledOnce();
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "upload", entityId: created.id }),
+      tx
+    );
+  });
 });

@@ -77,26 +77,32 @@ interface PreviewState {
   lossesCost: number;
   overweightCost: number;
   status: string;
+  calculationRuleVersions?: Record<string, number>;
 }
+
+const EMPTY_PREVIEW: PreviewState = {
+  producedKg: 0,
+  expectedYieldKg: 0,
+  realYieldPercent: 0,
+  overweightTotalKg: 0,
+  overweightPercent: 0,
+  productionCost: 0,
+  lossesCost: 0,
+  overweightCost: 0,
+  status: "OK"
+};
+
+const DEMO_PREVIEW: Record<"P1" | "P2", PreviewState> = {
+  P1: { producedKg: 5040, expectedYieldKg: 5110, realYieldPercent: 0.986, overweightTotalKg: 7.2, overweightPercent: 0.001429, productionCost: 28224, lossesCost: 31.4, overweightCost: 40.32, status: "OK" },
+  P2: { producedKg: 2520, expectedYieldKg: 2590, realYieldPercent: 0.973, overweightTotalKg: 4.1, overweightPercent: 0.001627, productionCost: 14112, lossesCost: 18.2, overweightCost: 22.96, status: "OK" }
+};
 
 function today() {
   return new Date().toISOString().slice(0, 10);
 }
 
-function defaultWeightConfig(sector: "P1" | "P2") {
-  return {
-    formula: "BOX_WEIGHT" as const,
-    packageWeightKg: sector === "P1" ? 1 : 2,
-    boxWeightKg: sector === "P1" ? 12 : 2,
-    packagesPerBox: sector === "P1" ? 12 : 1,
-    massWeightKg: sector === "P1" ? 511 : 0.582,
-    targetPackageWeightG: 1000,
-    overweightTolerancePercent: 0.02
-  };
-}
-
-function productWeightConfig(product: ProductRow | undefined, sector: "P1" | "P2") {
-  if (!product?.weightConfig) return defaultWeightConfig(sector);
+function productWeightConfig(product: ProductRow | undefined) {
+  if (!product?.weightConfig) return null;
   return {
     formula: product.weightConfig.formula,
     packageWeightKg: Number(product.weightConfig.packageWeightKg),
@@ -132,31 +138,8 @@ export function ProductionForm({ sector }: { sector: "P1" | "P2" }) {
   const session = useMemo(() => getSession(), []);
 
   const selectedProduct = products.find((product) => product.id === productId);
-  const weightConfig = productWeightConfig(selectedProduct, sector);
-
-  const localPreview = useMemo((): PreviewState => {
-    const producedKg =
-      weightConfig.formula === "PACKAGE_WEIGHT"
-        ? state.packedBoxes * weightConfig.packagesPerBox * weightConfig.packageWeightKg
-        : state.packedBoxes * weightConfig.boxWeightKg;
-    const expectedKg = state.realizedBatches * weightConfig.massWeightKg + (sector === "P1" ? state.usedReworkKg : 0);
-    const yieldPercent = expectedKg === 0 ? 0 : producedKg / expectedKg;
-    const overweightG = Math.max(state.averagePackageWeightG - weightConfig.targetPackageWeightG, 0);
-    const overweightKg = (overweightG * state.packedBoxes * weightConfig.packagesPerBox) / 1000;
-    return {
-      producedKg,
-      expectedYieldKg: expectedKg,
-      realYieldPercent: yieldPercent,
-      overweightTotalKg: overweightKg,
-      overweightPercent: producedKg === 0 ? 0 : overweightKg / producedKg,
-      productionCost: producedKg * Number(selectedProduct?.pricePerKg ?? 0),
-      lossesCost: state.weighingLossKg * Number(selectedProduct?.pricePerKg ?? 0),
-      overweightCost: overweightKg * Number(selectedProduct?.pricePerKg ?? 0),
-      status: overweightKg / Math.max(producedKg, 1) > weightConfig.overweightTolerancePercent ? "ATTENTION" : "OK"
-    };
-  }, [state, weightConfig, sector, selectedProduct?.pricePerKg]);
-
-  const preview = serverPreview ?? localPreview;
+  const weightConfig = useMemo(() => productWeightConfig(selectedProduct), [selectedProduct]);
+  const preview = serverPreview ?? (DEMO_MODE ? DEMO_PREVIEW[sector] : EMPTY_PREVIEW);
 
   async function loadReferences() {
     if (!session) return;
@@ -221,6 +204,34 @@ export function ProductionForm({ sector }: { sector: "P1" | "P2" }) {
     loadEntries(weekId);
   }, [weekId]);
 
+  useEffect(() => {
+    if (DEMO_MODE || !selectedProduct?.weightConfig || !weightConfig) return;
+    let active = true;
+    const timer = window.setTimeout(async () => {
+      try {
+        const response = await apiPostClient<PreviewState>("/production/preview", {
+          sector,
+          plannedBatches: state.plannedBatches,
+          realizedBatches: state.realizedBatches,
+          usedReworkKg: state.usedReworkKg,
+          packedBoxes: state.packedBoxes,
+          weighingLossKg: state.weighingLossKg,
+          generatedReworkKg: state.generatedReworkKg,
+          averagePackageWeightG: state.averagePackageWeightG,
+          weightConfig,
+          pricePerKg: Number(selectedProduct.pricePerKg ?? 0)
+        });
+        if (active) setServerPreview(response);
+      } catch {
+        if (active) setServerPreview(null);
+      }
+    }, 250);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [sector, selectedProduct, state, weightConfig]);
+
   function update<K extends keyof FormState>(key: K, value: FormState[K]) {
     setState((current) => ({ ...current, [key]: value }));
     setServerPreview(null);
@@ -228,8 +239,13 @@ export function ProductionForm({ sector }: { sector: "P1" | "P2" }) {
 
   async function validateWithBackend() {
     if (DEMO_MODE) {
-      setServerPreview(localPreview);
-      setMessage("Cálculo atualizado localmente no preview demonstrativo.");
+      setServerPreview(DEMO_PREVIEW[sector]);
+      setMessage("Preview demonstrativo usa valores isolados; cálculos operacionais existem somente no backend.");
+      return;
+    }
+    if (!weightConfig) {
+      setServerPreview(null);
+      setMessage("Produto sem configuração de peso; cálculo bloqueado para revisão.");
       return;
     }
     setLoading(true);

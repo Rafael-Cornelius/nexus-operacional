@@ -56,11 +56,9 @@ export const productSchema = z.object({
   unit: z.string().default("kg"),
   overweightTolerancePercent: z.coerce.number().nonnegative().default(0.02),
   formula: z.enum(["BOX_WEIGHT", "PACKAGE_WEIGHT"]).default("BOX_WEIGHT"),
-  pricePerKg: z.coerce.number().nonnegative().default(0),
-  filmCostPerKg: z.coerce.number().nonnegative().default(0),
   packageFilmWeightG: z.coerce.number().nonnegative().default(0),
   notes: z.string().max(2000).optional()
-});
+}).strict();
 
 export const lossEntrySchema = z.object({
   weekId: uuidSchema,
@@ -72,6 +70,11 @@ export const lossEntrySchema = z.object({
   shiftId: uuidSchema.optional(),
   lossTypeId: uuidSchema,
   quantityKg: z.coerce.number().nonnegative(),
+  filmShift1Kg: z.coerce.number().nonnegative().optional(),
+  filmShift2Kg: z.coerce.number().nonnegative().optional(),
+  boxLossUnits: z.coerce.number().int().nonnegative().optional(),
+  boxLossShift1Units: z.coerce.number().int().nonnegative().optional(),
+  boxLossShift2Units: z.coerce.number().int().nonnegative().optional(),
   packedBoxes: z.coerce.number().nonnegative().optional().default(0),
   reason: z.string().max(240).optional(),
   notes: z.string().max(2000).optional()
@@ -91,13 +94,23 @@ export const dosageCheckSchema = z.object({
 
 export const productPricePeriodSchema = z.object({
   startsOn: z.coerce.date(),
-  endsOn: z.coerce.date().optional(),
-  pricePerKg: z.coerce.number().nonnegative(),
-  filmCostPerKg: z.coerce.number().nonnegative().default(0)
-}).refine((value) => !value.endsOn || value.endsOn >= value.startsOn, {
+  endsOn: z.coerce.date().nullable().optional(),
+  pricePerKg: z.coerce.number().positive("Informe um preco por quilograma maior que zero."),
+  filmCostPerKg: z.coerce.number().nonnegative().default(0),
+  currency: z.string().trim().toUpperCase().regex(/^[A-Z]{3}$/, "Informe a moeda com tres letras, por exemplo BRL."),
+  origin: z.string().trim().min(2, "Informe a origem do preco.").max(120),
+  observation: z.string().trim().max(2000).nullable().optional()
+}).strict().refine((value) => !value.endsOn || value.endsOn >= value.startsOn, {
   message: "O fim do período não pode ser anterior ao início.",
   path: ["endsOn"]
 });
+
+export const productPriceApprovalSchema = z.object({
+  recordVersion: z.coerce.number().int().positive(),
+  reason: z.string().trim().min(5, "Informe um motivo com pelo menos 5 caracteres.").max(1000)
+}).strict();
+
+export const productPriceRetirementSchema = productPriceApprovalSchema;
 
 export const downtimeEntrySchema = z.object({
   weekId: uuidSchema,

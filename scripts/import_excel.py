@@ -116,6 +116,38 @@ def read_sheet_rows(zf: zipfile.ZipFile, shared: list[str], sheet_path: str) -> 
     return rows
 
 
+def read_sheet_cell_details(
+    zf: zipfile.ZipFile,
+    shared: list[str],
+    sheet_path: str,
+) -> dict[int, dict[int, dict[str, str | None]]]:
+    root = read_xml(zf, sheet_path)
+    rows: dict[int, dict[int, dict[str, str | None]]] = {}
+    for cell in root.findall(f".//{q('m', 'c')}"):
+        ref = cell.attrib.get("r", "A1")
+        formula = cell.find(q("m", "f"))
+        rows.setdefault(row_index(ref), {})[column_index(ref)] = {
+            "cell": ref,
+            "value": cell_value(shared, cell),
+            "type": cell.attrib.get("t"),
+            "formula": "".join(formula.itertext()) if formula is not None else None,
+            "formulaAttributes": dict(formula.attrib) if formula is not None else None,
+        }
+    return rows
+
+
+def parse_range(reference: str) -> tuple[int, int, int, int]:
+    match = re.fullmatch(r"([A-Z]+)(\d+):([A-Z]+)(\d+)", reference)
+    if not match:
+        raise ValueError(f"Invalid worksheet range: {reference}")
+    return (
+        column_index(match.group(1)),
+        int(match.group(2)),
+        column_index(match.group(3)),
+        int(match.group(4)),
+    )
+
+
 def clean_text(value: Any) -> str | None:
     if value is None:
         return None
@@ -188,25 +220,32 @@ def import_error(sheet: str, row: int, column: int, field: str, message: str, ra
     }
 
 
-def infer_sector(name: str) -> str:
-    p2_keywords = [
-        "BOLO",
-        "CHURROS",
-        "COOKIE",
-        "COOKIES",
-        "TORTA",
-        "CROISSANT",
-        "FOLHADO",
-        "CAROLINA",
-        "ECLAIR",
-        "ÉCLAIR",
-    ]
-    upper = name.upper()
-    return "P2" if any(keyword in upper for keyword in p2_keywords) else "P1"
-
-
 def completeness_score(row: dict[str, Any]) -> int:
     return sum(1 for value in row.values() if value not in (None, ""))
+
+
+def row_source_cells(
+    details: dict[int, dict[int, dict[str, Any]]],
+    row_number: int,
+    columns: list[int],
+) -> dict[str, dict[str, Any]]:
+    return {
+        cell_ref(row_number, column): details.get(row_number, {}).get(column, {
+            "cell": cell_ref(row_number, column),
+            "value": None,
+            "type": None,
+            "formula": None,
+            "formulaAttributes": None,
+        })
+        for column in columns
+    }
+
+
+def has_source_value(source_cells: dict[str, dict[str, Any]]) -> bool:
+    return any(
+        cell.get("value") not in (None, "") or cell.get("formula") is not None
+        for cell in source_cells.values()
+    )
 
 
 def extract_legacy_products(
@@ -219,20 +258,42 @@ def extract_legacy_products(
     weights_by_code: dict[str, dict[str, Any]] = {}
     duplicate_product_codes: list[str] = []
     duplicate_weight_codes: list[str] = []
+    unresolved_product_rows: list[dict[str, Any]] = []
 
     product_sheet = "Pacotes-caixas"
     if product_sheet in sheet_paths:
         rows = read_sheet_rows(zf, shared, sheet_paths[product_sheet])
+        details = read_sheet_cell_details(zf, shared, sheet_paths[product_sheet])
         for row_number in sorted(rows):
             if row_number == 1:
                 continue
             row = rows[row_number]
+            source_cells = row_source_cells(details, row_number, list(range(1, 7)))
+            if not has_source_value(source_cells):
+                continue
             code = normalize_code(row.get(1))
             name = clean_text(row.get(2))
-            if not code and not name:
-                continue
             if not code or not name:
-                errors.append(import_error(product_sheet, row_number, 1, "code", "Product row without code or name.", row.get(1)))
+                missing_field = "code" if not code else "name"
+                errors.append(import_error(
+                    product_sheet,
+                    row_number,
+                    1 if not code else 2,
+                    missing_field,
+                    "Product row without code or name; source row was preserved for human correction.",
+                    row.get(1 if not code else 2),
+                ))
+                unresolved_product_rows.append({
+                    "sheetName": product_sheet,
+                    "rowNumber": row_number,
+                    "code": code,
+                    "name": name,
+                    "packageWeightKg": as_number(row.get(3)),
+                    "boxWeightKg": as_number(row.get(4)),
+                    "packagesPerBox": as_int(row.get(5)),
+                    "massWeightKg": as_number(row.get(6)),
+                    "sourceCells": source_cells,
+                })
                 continue
 
             candidate = {
@@ -242,38 +303,66 @@ def extract_legacy_products(
                 "boxWeightKg": as_number(row.get(4)),
                 "packagesPerBox": as_int(row.get(5)),
                 "massWeightKg": as_number(row.get(6)),
-                "sourceRows": [{"sheet": product_sheet, "row": row_number}],
+                "sourceRows": [{
+                    "sheet": product_sheet,
+                    "row": row_number,
+                    "sourceCells": source_cells,
+                }],
             }
             if code in products_by_code:
                 duplicate_product_codes.append(code)
                 errors.append(import_error(product_sheet, row_number, 1, "code", f"Duplicate product code {code}.", row.get(1)))
-                if completeness_score(candidate) > completeness_score(products_by_code[code]):
-                    products_by_code[code] = candidate
+                products_by_code[code]["sourceRows"].extend(candidate["sourceRows"])
             else:
                 products_by_code[code] = candidate
 
     weight_sheet = "Banco de Dados Pesagen"
     if weight_sheet in sheet_paths:
         rows = read_sheet_rows(zf, shared, sheet_paths[weight_sheet])
+        details = read_sheet_cell_details(zf, shared, sheet_paths[weight_sheet])
         for row_number in sorted(rows):
             if row_number < 8:
                 continue
             row = rows[row_number]
+            source_cells = row_source_cells(details, row_number, list(range(4, 8)))
+            if not has_source_value(source_cells):
+                continue
             code = normalize_code(row.get(4))
             if not code:
+                errors.append(import_error(
+                    weight_sheet,
+                    row_number,
+                    4,
+                    "code",
+                    "Weighing row without product code; source row was preserved for human correction.",
+                    row.get(4),
+                ))
+                unresolved_product_rows.append({
+                    "sheetName": weight_sheet,
+                    "rowNumber": row_number,
+                    "code": None,
+                    "name": None,
+                    "massWeightKg": as_number(row.get(5)),
+                    "boxWeightKg": as_number(row.get(6)),
+                    "targetPackageWeightG": as_number(row.get(7)),
+                    "sourceCells": source_cells,
+                })
                 continue
             candidate = {
                 "code": code,
                 "massWeightKg": as_number(row.get(5)),
                 "boxWeightKg": as_number(row.get(6)),
                 "targetPackageWeightG": as_number(row.get(7)),
-                "sourceRows": [{"sheet": weight_sheet, "row": row_number}],
+                "sourceRows": [{
+                    "sheet": weight_sheet,
+                    "row": row_number,
+                    "sourceCells": source_cells,
+                }],
             }
             if code in weights_by_code:
                 duplicate_weight_codes.append(code)
                 errors.append(import_error(weight_sheet, row_number, 4, "code", f"Duplicate weighing code {code}.", row.get(4)))
-                if completeness_score(candidate) > completeness_score(weights_by_code[code]):
-                    weights_by_code[code] = candidate
+                weights_by_code[code]["sourceRows"].extend(candidate["sourceRows"])
             else:
                 weights_by_code[code] = candidate
 
@@ -282,35 +371,59 @@ def extract_legacy_products(
     for code in all_codes:
         product = products_by_code.get(code, {})
         weight = weights_by_code.get(code, {})
-        name = product.get("name") or f"Produto legado {code}"
+        name = product.get("name")
         package_weight = product.get("packageWeightKg")
-        target_package_weight = weight.get("targetPackageWeightG") or (package_weight * 1000 if package_weight else None)
-        box_weight = product.get("boxWeightKg") or weight.get("boxWeightKg")
+        target_package_weight = weight.get("targetPackageWeightG")
+        product_box_weight = product.get("boxWeightKg")
+        weighing_box_weight = weight.get("boxWeightKg")
+        box_weight = product_box_weight if product_box_weight is not None else weighing_box_weight
         packages_per_box = product.get("packagesPerBox")
-        if not packages_per_box and package_weight and box_weight:
-            packages_per_box = max(int(round(box_weight / package_weight)), 1)
+        product_mass_weight = product.get("massWeightKg")
+        weighing_mass_weight = weight.get("massWeightKg")
+        mass_weight = product_mass_weight if product_mass_weight is not None else weighing_mass_weight
 
-        if not box_weight:
+        if product_box_weight is not None and weighing_box_weight is not None and abs(product_box_weight - weighing_box_weight) > 0.000001:
+            errors.append(import_error(
+                product_sheet,
+                product.get("sourceRows", [{"row": 0}])[0]["row"],
+                4,
+                "boxWeightKg",
+                f"Product {code} has conflicting box weights across source sheets; no value was reconciled automatically.",
+                product_box_weight,
+            ))
+        if product_mass_weight is not None and weighing_mass_weight is not None and abs(product_mass_weight - weighing_mass_weight) > 0.000001:
+            errors.append(import_error(
+                product_sheet,
+                product.get("sourceRows", [{"row": 0}])[0]["row"],
+                6,
+                "massWeightKg",
+                f"Product {code} has conflicting mass weights across source sheets; no value was reconciled automatically.",
+                product_mass_weight,
+            ))
+
+        if box_weight is None or box_weight <= 0:
             errors.append(import_error(product_sheet, product.get("sourceRows", [{"row": 0}])[0]["row"], 4, "boxWeightKg", f"Product {code} without box weight."))
-        if not packages_per_box:
+        if packages_per_box is None or packages_per_box <= 0:
             errors.append(import_error(product_sheet, product.get("sourceRows", [{"row": 0}])[0]["row"], 5, "packagesPerBox", f"Product {code} without packages per box."))
-        if not target_package_weight:
+        if target_package_weight is None or target_package_weight <= 0:
             errors.append(import_error(weight_sheet, weight.get("sourceRows", [{"row": 0}])[0]["row"], 7, "targetPackageWeightG", f"Product {code} without target package weight."))
+        if not name:
+            errors.append(import_error(weight_sheet, weight.get("sourceRows", [{"row": 0}])[0]["row"], 4, "name", f"Product {code} exists only in weighing data and has no source name."))
 
         normalized_products.append(
             {
                 "code": code,
                 "name": name,
-                "defaultSector": infer_sector(name),
-                "packageWeightKg": package_weight or (target_package_weight / 1000 if target_package_weight else 0),
-                "boxWeightKg": box_weight or 0,
-                "packagesPerBox": packages_per_box or 1,
-                "massWeightKg": product.get("massWeightKg") or weight.get("massWeightKg") or 0,
-                "targetPackageWeightG": target_package_weight or 1,
-                "unit": "kg",
-                "overweightTolerancePercent": 0.02,
-                "formula": "BOX_WEIGHT",
-                "active": True,
+                "defaultSector": None,
+                "packageWeightKg": package_weight,
+                "boxWeightKg": box_weight,
+                "packagesPerBox": packages_per_box,
+                "massWeightKg": mass_weight,
+                "targetPackageWeightG": target_package_weight,
+                "unit": None,
+                "overweightTolerancePercent": None,
+                "formula": None,
+                "active": None,
                 "source": {
                     "productRows": product.get("sourceRows", []),
                     "weightRows": weight.get("sourceRows", []),
@@ -323,6 +436,7 @@ def extract_legacy_products(
         "productCount": len(normalized_products),
         "duplicateProductCodes": sorted(set(duplicate_product_codes)),
         "duplicateWeightCodes": sorted(set(duplicate_weight_codes)),
+        "unresolvedProductRows": unresolved_product_rows,
         "importErrors": errors,
         "importErrorCount": len(errors),
     }
@@ -371,20 +485,43 @@ def extract_operational_data(
     def add_production(sheet: str, sector: str, columns: dict[str, int]) -> None:
         if sheet not in sheet_paths:
             return
-        for row_number, row in read_sheet_rows(zf, shared, sheet_paths[sheet]).items():
+        rows = read_sheet_rows(zf, shared, sheet_paths[sheet])
+        details = read_sheet_cell_details(zf, shared, sheet_paths[sheet])
+        relevant_columns = sorted(set(columns.values()))
+        for row_number, row in rows.items():
+            if row_number < 3:
+                continue
+            source_cells = row_source_cells(details, row_number, relevant_columns)
+            if not has_source_value(source_cells):
+                continue
             week_number = as_int(row.get(columns["week"]))
             date = excel_date(row.get(columns["date"]))
             product_code = normalize_code(row.get(columns["product"]))
-            if not week_number or not date or not product_code:
-                continue
-            if not date_is_allowed(sheet, row_number, columns["date"], date):
-                continue
             planned = as_number(row.get(columns["planned"]))
             realized = as_number(row.get(columns["realized"]))
             packed_boxes = as_number(row.get(columns["boxes"]))
-            if planned is None or realized is None or packed_boxes is None:
-                errors.append(import_error(sheet, row_number, columns["boxes"], "production", "Production row without planned, realized batches or packed boxes."))
-                continue
+            production_order = clean_text(row.get(columns["op"]))
+            required_fields = [
+                ("legacyWeekNumber", week_number, columns["week"]),
+                ("date", date, columns["date"]),
+                ("productCode", product_code, columns["product"]),
+                ("productionOrder", production_order, columns["op"]),
+                ("plannedBatches", planned, columns["planned"]),
+                ("realizedBatches", realized, columns["realized"]),
+                ("packedBoxes", packed_boxes, columns["boxes"]),
+            ]
+            for field, value, column in required_fields:
+                if value is None:
+                    errors.append(import_error(
+                        sheet,
+                        row_number,
+                        column,
+                        field,
+                        f"Production row without valid {field}; source row was preserved and no default was used.",
+                        row.get(column),
+                    ))
+            if date:
+                date_is_allowed(sheet, row_number, columns["date"], date)
             production_entries.append({
                 "sheetName": sheet,
                 "rowNumber": row_number,
@@ -392,16 +529,17 @@ def extract_operational_data(
                 "legacyWeekNumber": week_number,
                 "date": date,
                 "productCode": product_code,
-                "productionOrder": clean_text(row.get(columns["op"])) or f"LEG-{sheet}-{row_number}",
+                "productionOrder": production_order,
                 "plannedBatches": planned,
                 "realizedBatches": realized,
-                "usedReworkKg": as_number(row.get(columns.get("usedRework", 0))) or 0,
+                "usedReworkKg": as_number(row.get(columns["usedRework"])) if "usedRework" in columns else None,
                 "packedBoxes": packed_boxes,
-                "weighingLossKg": as_number(row.get(columns["weighingLoss"])) or 0,
-                "generatedReworkKg": as_number(row.get(columns["generatedRework"])) or 0,
+                "weighingLossKg": as_number(row.get(columns["weighingLoss"])),
+                "generatedReworkKg": as_number(row.get(columns["generatedRework"])),
                 "averagePackageWeightG": as_number(row.get(columns["averageWeight"])),
                 "notes": clean_text(row.get(columns["notes"])),
-                "pricePerKg": as_number(row.get(columns["pricePerKg"])) or 0,
+                "pricePerKg": as_number(row.get(columns["pricePerKg"])),
+                "sourceCells": source_cells,
             })
 
     add_production("Plan x Real (P1)", "P1", {
@@ -413,12 +551,15 @@ def extract_operational_data(
         "boxes": 8, "weighingLoss": 10, "generatedRework": 11, "averageWeight": 17, "notes": 21, "pricePerKg": 22,
     })
 
-    production_orders = {entry["productionOrder"] for entry in production_entries}
-    filtered_production_entries: list[dict[str, Any]] = []
+    production_orders = {
+        entry["productionOrder"]
+        for entry in production_entries
+        if entry["productionOrder"] is not None
+    }
     for entry in production_entries:
         planned = entry["plannedBatches"]
-        planned_as_code = str(int(planned)) if float(planned).is_integer() else ""
-        if planned >= 10000 and planned_as_code in production_orders and planned_as_code != entry["productionOrder"]:
+        planned_as_code = str(int(planned)) if planned is not None and float(planned).is_integer() else ""
+        if planned is not None and planned >= 10000 and planned_as_code in production_orders and planned_as_code != entry["productionOrder"]:
             errors.append(
                 import_error(
                     entry["sheetName"],
@@ -429,41 +570,84 @@ def extract_operational_data(
                     planned_as_code,
                 )
             )
-            continue
-        filtered_production_entries.append(entry)
-    production_entries = filtered_production_entries
 
     loss_sheet = "CONTROLE DE PERDAS"
     if loss_sheet in sheet_paths:
-        for row_number, row in read_sheet_rows(zf, shared, sheet_paths[loss_sheet]).items():
+        rows = read_sheet_rows(zf, shared, sheet_paths[loss_sheet])
+        details = read_sheet_cell_details(zf, shared, sheet_paths[loss_sheet])
+        for row_number, row in rows.items():
+            if row_number < 3 or row_number > 97:
+                continue
+            source_cells = row_source_cells(details, row_number, list(range(2, 10)))
+            if not has_source_value(source_cells):
+                continue
             date = excel_date(row.get(2))
             quantity = as_number(row.get(4))
             machine = clean_text(row.get(3))
-            if not date or quantity is None or not machine:
-                continue
-            if not date_is_allowed(loss_sheet, row_number, 2, date):
-                continue
+            film_shift_1 = as_number(row.get(5))
+            film_shift_2 = as_number(row.get(6))
+            box_total = as_number(row.get(7))
+            box_shift_1 = as_number(row.get(8))
+            box_shift_2 = as_number(row.get(9))
+            if not date:
+                errors.append(import_error(loss_sheet, row_number, 2, "date", "Loss row without a valid date; source cells preserved for review.", row.get(2)))
+            if not machine:
+                errors.append(import_error(loss_sheet, row_number, 3, "legacyLine", "Loss row without machine; source cells preserved for review.", row.get(3)))
+            if date:
+                date_is_allowed(loss_sheet, row_number, 2, date)
             loss_entries.append({
                 "sheetName": loss_sheet,
                 "rowNumber": row_number,
                 "date": date,
                 "quantityKg": quantity,
+                "filmShift1Kg": film_shift_1,
+                "filmShift2Kg": film_shift_2,
+                "boxLossUnits": box_total,
+                "boxLossShift1Units": box_shift_1,
+                "boxLossShift2Units": box_shift_2,
+                "sector": None,
+                "productCode": None,
                 "legacyLine": machine,
                 "lossType": "PACKAGING",
-                "notes": f"Importado do controle de perdas; máquina: {machine}",
+                "notes": None,
+                "sourceCells": source_cells,
             })
 
     downtime_sheet = "relatorios de paradas"
     if downtime_sheet in sheet_paths:
-        for row_number, row in read_sheet_rows(zf, shared, sheet_paths[downtime_sheet]).items():
+        rows = read_sheet_rows(zf, shared, sheet_paths[downtime_sheet])
+        details = read_sheet_cell_details(zf, shared, sheet_paths[downtime_sheet])
+        for row_number, row in rows.items():
+            if row_number < 4:
+                continue
+            source_cells = row_source_cells(details, row_number, list(range(1, 9)))
+            if not has_source_value(source_cells):
+                continue
             date = excel_date(row.get(1))
             production_start, production_end = excel_time(row.get(2)), excel_time(row.get(3))
             downtime_start, downtime_end = excel_time(row.get(4)), excel_time(row.get(5))
             reason, legacy_line = clean_text(row.get(6)), clean_text(row.get(7))
-            if not all([date, production_start, production_end, downtime_start, downtime_end, reason, legacy_line]):
-                continue
-            if not date_is_allowed(downtime_sheet, row_number, 1, date):
-                continue
+            required_fields = [
+                ("date", date, 1),
+                ("productionStart", production_start, 2),
+                ("productionEnd", production_end, 3),
+                ("downtimeStart", downtime_start, 4),
+                ("downtimeEnd", downtime_end, 5),
+                ("reason", reason, 6),
+                ("legacyLine", legacy_line, 7),
+            ]
+            for field, value, column in required_fields:
+                if value is None:
+                    errors.append(import_error(
+                        downtime_sheet,
+                        row_number,
+                        column,
+                        field,
+                        f"Downtime row without valid {field}; source row was preserved and no default was used.",
+                        row.get(column),
+                    ))
+            if date:
+                date_is_allowed(downtime_sheet, row_number, 1, date)
             downtime_entries.append({
                 "sheetName": downtime_sheet,
                 "rowNumber": row_number,
@@ -475,6 +659,7 @@ def extract_operational_data(
                 "reason": reason,
                 "legacyLine": legacy_line,
                 "legacyWeekNumber": as_int(row.get(8)),
+                "sourceCells": source_cells,
             })
 
     return {
@@ -488,6 +673,125 @@ def extract_operational_data(
     }
 
 
+def extract_orphan_dosage_samples(
+    zf: zipfile.ZipFile,
+    shared: list[str],
+    sheet_paths: dict[str, str],
+) -> dict[str, Any]:
+    sheet = "Perdas - dosagem"
+    samples: list[dict[str, Any]] = []
+    if sheet in sheet_paths:
+        rows = read_sheet_rows(zf, shared, sheet_paths[sheet])
+        details = read_sheet_cell_details(zf, shared, sheet_paths[sheet])
+        for row_number in range(11, 31):
+            for column in range(2, 5):
+                raw = rows.get(row_number, {}).get(column)
+                weight = as_number(raw)
+                if raw in (None, ""):
+                    continue
+                samples.append({
+                    "sheetName": sheet,
+                    "cell": cell_ref(row_number, column),
+                    "rowNumber": row_number,
+                    "columnNumber": column,
+                    "rawValue": raw,
+                    "weightG": weight,
+                    "sourceCellDetails": details.get(row_number, {}).get(column, {
+                        "cell": cell_ref(row_number, column),
+                        "value": raw,
+                        "type": None,
+                        "formula": None,
+                        "formulaAttributes": None,
+                    }),
+                    "missingContext": [
+                        "product",
+                        "productionOrder",
+                        "date",
+                        "week",
+                        "sector",
+                        "equipment",
+                        "shift",
+                        "operator",
+                    ],
+                })
+    return {"dosageSamples": samples, "dosageSampleCount": len(samples)}
+
+
+def extract_materialized_history(
+    zf: zipfile.ZipFile,
+    shared: list[str],
+    sheet_paths: dict[str, str],
+) -> dict[str, Any]:
+    sheet = "ARQUIVO MORTO"
+    wanted_tables = {
+        "tbl_Historico_P1",
+        "tbl_Historico_P2",
+        "tbl_Historico_Paradas",
+        "tbl_Historico_Perdas",
+    }
+    records: list[dict[str, Any]] = []
+    if sheet not in sheet_paths:
+        return {"historicalEntries": records, "historicalEntryCount": 0, "historicalCountsByTable": {}}
+
+    sheet_path = sheet_paths[sheet]
+    rows = read_sheet_rows(zf, shared, sheet_path)
+    details = read_sheet_cell_details(zf, shared, sheet_path)
+    sheet_root = read_xml(zf, sheet_path)
+    sheet_relationships = rels_for(zf, sheet_path)
+    linked_table_paths = {
+        sheet_relationships.get(part.attrib.get(q("r", "id"), ""))
+        for part in sheet_root.findall(f".//{q('m', 'tablePart')}")
+    }
+    for table_path in sorted(path for path in linked_table_paths if path and path in zf.namelist()):
+        table = read_xml(zf, table_path)
+        table_name = table.attrib.get("name", "")
+        if table_name not in wanted_tables:
+            continue
+        start_column, header_row, end_column, end_row = parse_range(table.attrib["ref"])
+        headers = [
+            column.attrib.get("name", f"Column {index + 1}")
+            for index, column in enumerate(table.findall(f".//{q('m', 'tableColumn')}"))
+        ]
+        for row_number in range(header_row + 1, end_row + 1):
+            source_cells: dict[str, dict[str, Any]] = {}
+            raw_values: dict[str, str | None] = {}
+            for offset, column in enumerate(range(start_column, end_column + 1)):
+                raw = rows.get(row_number, {}).get(column)
+                source_cells[cell_ref(row_number, column)] = details.get(row_number, {}).get(column, {
+                    "cell": cell_ref(row_number, column),
+                    "value": raw,
+                    "type": None,
+                    "formula": None,
+                    "formulaAttributes": None,
+                })
+                header = headers[offset] if offset < len(headers) else column_name(column)
+                raw_values[header] = raw
+            if not any(value not in (None, "") for value in raw_values.values()):
+                continue
+            values = list(raw_values.values())
+            records.append({
+                "sheetName": sheet,
+                "tableName": table_name,
+                "tableRange": table.attrib["ref"],
+                "rowNumber": row_number,
+                "firstCell": cell_ref(row_number, start_column),
+                "recordId": clean_text(values[0] if values else None),
+                "recordKey": clean_text(values[1] if len(values) > 1 else None),
+                "version": as_int(values[7] if len(values) > 7 else None),
+                "activeRaw": clean_text(values[8] if len(values) > 8 else None),
+                "sourceHash": clean_text(values[-1] if values else None),
+                "rawValues": raw_values,
+                "sourceCells": source_cells,
+            })
+
+    counts = Counter(record["tableName"] for record in records)
+    return {
+        "historicalEntries": records,
+        "historicalEntryCount": len(records),
+        "historicalCountsByTable": dict(counts),
+    }
+
+
 def inspect_workbook(path: Path) -> dict[str, Any]:
     with zipfile.ZipFile(path) as zf:
         names = zf.namelist()
@@ -498,6 +802,7 @@ def inspect_workbook(path: Path) -> dict[str, Any]:
         sheet_paths: dict[str, str] = {}
         total_formulas = 0
         errors = Counter()
+        formula_errors: list[dict[str, Any]] = []
         tables = [name for name in names if name.startswith("xl/tables/") and name.endswith(".xml")]
         charts = [name for name in names if name.startswith("xl/charts/chart") and name.endswith(".xml")]
 
@@ -524,15 +829,30 @@ def inspect_workbook(path: Path) -> dict[str, Any]:
             sheet_errors = Counter()
             for cell in root.findall(f".//{q('m', 'c')}"):
                 formula = cell.find(q("m", "f"))
+                formula_text = "".join(formula.itertext()) if formula is not None else None
                 value = cell_value(shared, cell)
                 if formula is not None:
                     formulas += 1
                     total_formulas += 1
                 if value not in (None, "") or formula is not None:
                     non_empty += 1
-                if cell.attrib.get("t") == "e" or value in ERROR_VALUES:
-                    sheet_errors[str(value)] += 1
-                    errors[str(value)] += 1
+                cached_error = cell.attrib.get("t") == "e" or value in ERROR_VALUES
+                broken_reference = formula_text is not None and "#REF!" in formula_text.upper()
+                if cached_error:
+                    error_type = str(value)
+                    sheet_errors[error_type] += 1
+                    errors[error_type] += 1
+                if cached_error or broken_reference:
+                    formula_errors.append({
+                        "sheetName": name,
+                        "cell": cell.attrib.get("r"),
+                        "formula": formula_text,
+                        "formulaAttributes": dict(formula.attrib) if formula is not None else None,
+                        "calculatedValue": value,
+                        "cellType": cell.attrib.get("t"),
+                        "errorType": str(value) if cached_error else "#REF!",
+                        "context": "formula" if formula is not None else "cell-value",
+                    })
             sheets.append(
                 {
                     "name": name,
@@ -552,9 +872,13 @@ def inspect_workbook(path: Path) -> dict[str, Any]:
             "tableCount": len(tables),
             "chartCount": len(charts),
             "errors": dict(errors),
+            "formulaErrors": formula_errors,
+            "formulaErrorCount": len(formula_errors),
             "legacyData": {
                 **extract_legacy_products(zf, shared, sheet_paths),
                 **extract_operational_data(zf, shared, sheet_paths, expected_period_from_filename(path)),
+                **extract_orphan_dosage_samples(zf, shared, sheet_paths),
+                **extract_materialized_history(zf, shared, sheet_paths),
             },
         }
 

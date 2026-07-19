@@ -50,23 +50,34 @@ interface GoalAlert extends OperationalGoalAlert {
 function asKpis(data: unknown): KpiPayload | null {
   if (!data || typeof data !== "object") return null;
   const record = data as Partial<KpiPayload>;
+  const fields = [
+    "productionTotalKg", "lossesTotalKg", "overweightTotalKg", "overweightPercent",
+    "averageYield", "stoppedMinutes", "records"
+  ] as const;
+  if (fields.some((field) => typeof record[field] !== "number" || !Number.isFinite(record[field]))) {
+    return null;
+  }
   return {
-    productionTotalKg: Number(record.productionTotalKg ?? 0),
-    lossesTotalKg: Number(record.lossesTotalKg ?? 0),
-    overweightTotalKg: Number(record.overweightTotalKg ?? 0),
-    overweightPercent: Number(record.overweightPercent ?? 0),
-    averageYield: Number(record.averageYield ?? 0),
-    stoppedMinutes: Number(record.stoppedMinutes ?? 0),
-    records: Number(record.records ?? 0)
-  };
+    productionTotalKg: record.productionTotalKg,
+    lossesTotalKg: record.lossesTotalKg,
+    overweightTotalKg: record.overweightTotalKg,
+    overweightPercent: record.overweightPercent,
+    averageYield: record.averageYield,
+    stoppedMinutes: record.stoppedMinutes,
+    records: record.records
+  } as KpiPayload;
 }
 
-function asDowntime(data: unknown): DowntimePayload[] {
-  if (!Array.isArray(data)) return [];
-  return data.map((item) => {
+function asDowntime(data: unknown): DowntimePayload[] | null {
+  if (!Array.isArray(data)) return null;
+  const parsed = data.map((item) => {
     const row = item as Partial<DowntimePayload>;
-    return { reason: String(row.reason ?? "Sem motivo"), stoppedMinutes: Number(row.stoppedMinutes ?? 0) };
+    if (typeof row.reason !== "string" || !row.reason.trim() || typeof row.stoppedMinutes !== "number" || !Number.isFinite(row.stoppedMinutes)) {
+      return null;
+    }
+    return { reason: row.reason, stoppedMinutes: row.stoppedMinutes };
   });
+  return parsed.some((item) => item === null) ? null : parsed as DowntimePayload[];
 }
 
 export function MeetingMode() {
@@ -176,9 +187,10 @@ export function MeetingMode() {
           <StatCard key={kpi.label} label={kpi.label} value={kpi.value} hint={kpi.hint} status={kpi.status} />
         ))}
       </div>
+      {deck && !executiveKpis ? <p className="rounded-md border border-rose-300/30 bg-rose-400/10 p-3 text-sm text-rose-100">A API retornou KPIs incompletos ou inválidos. Nenhum zero foi presumido.</p> : null}
       <Card>
         <h3 className="mb-4 text-lg font-semibold">Pontos criticos</h3>
-        {downtime.length ? <div className="grid gap-3 md:grid-cols-3">
+        {downtime === null ? <p className="text-sm text-rose-200">A API retornou dados de parada incompletos ou inválidos.</p> : downtime.length ? <div className="grid gap-3 md:grid-cols-3">
           {downtime.slice(0, 3).map((item) => (
             <div key={item.reason} className="rounded-md border border-[var(--line)] bg-white/5 p-4">
               <p className="text-sm text-slate-400">{item.reason}</p>

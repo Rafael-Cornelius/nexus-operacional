@@ -1,4 +1,5 @@
 import { Injectable } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
 import { PrismaService } from "../../infrastructure/database/prisma.service";
 import { RequestContextService } from "../../infrastructure/request-context/request-context.service";
 
@@ -26,9 +27,9 @@ export class AuditService {
     private readonly requestContext: RequestContextService
   ) {}
 
-  async record(input: AuditInput) {
+  async record(input: AuditInput, client: Pick<Prisma.TransactionClient, "auditLog"> = this.prisma) {
     const context = this.requestContext.current();
-    return this.prisma.auditLog.create({
+    return client.auditLog.create({
       data: {
         userId: input.userId && input.userId !== "system" ? input.userId : undefined,
         module: input.module,

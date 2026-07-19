@@ -19,6 +19,7 @@ const ids = {
   type: "88888888-8888-4888-8888-888888888888",
   reason: "99999999-9999-4999-8999-999999999999",
   line: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  equipment: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
   user: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 };
 
@@ -110,9 +111,11 @@ describe("production operational CRUD", () => {
     };
     const productionUpdate = vi.fn().mockResolvedValue(updated);
     const auditRecord = vi.fn().mockResolvedValue(undefined);
-    const prisma = {
+    const transaction = {
+      $queryRaw: vi.fn().mockResolvedValue([]),
       productionEntry: {
         findUnique: vi.fn().mockResolvedValue(current),
+        findFirst: vi.fn().mockResolvedValue(null),
         update: productionUpdate
       },
       weeklyPeriod: { findUnique: vi.fn().mockResolvedValue(week) },
@@ -137,12 +140,22 @@ describe("production operational CRUD", () => {
         findUnique: vi.fn().mockResolvedValue({ id: ids.sector, code: "P1" })
       },
       productPricePeriod: {
-        findFirst: vi.fn().mockResolvedValue({ pricePerKg: 10 })
+        findFirst: vi.fn().mockResolvedValue({
+          id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+          pricePerKg: 10,
+          version: 1,
+          origin: "MANUAL",
+          currency: "BRL"
+        })
       },
       productionOrder: {
         findUnique: vi.fn().mockResolvedValue(null),
         upsert: vi.fn().mockResolvedValue({ id: ids.order, sectorCode: "P1" })
       }
+    };
+    const prisma = {
+      ...transaction,
+      $transaction: vi.fn((operation: (client: typeof transaction) => unknown) => operation(transaction))
     };
     const service = new ProductionService(prisma as never, { record: auditRecord } as never);
 
@@ -169,7 +182,8 @@ describe("production operational CRUD", () => {
         before: current,
         after: updated,
         reason: "Correcao de apontamento aprovado"
-      })
+      }),
+      transaction
     );
   });
 
@@ -227,7 +241,8 @@ describe("losses operational CRUD", () => {
     };
     const lossUpdate = vi.fn().mockResolvedValue(updated);
     const auditRecord = vi.fn().mockResolvedValue(undefined);
-    const prisma = {
+    const transaction = {
+      $queryRaw: vi.fn().mockResolvedValue([{ id: ids.entry }]),
       lossEntry: {
         findUnique: vi.fn().mockResolvedValue(current),
         update: lossUpdate
@@ -254,6 +269,10 @@ describe("losses operational CRUD", () => {
         findFirst: vi.fn().mockResolvedValue({ pricePerKg: 10, filmCostPerKg: 2 })
       }
     };
+    const prisma = {
+      ...transaction,
+      $transaction: vi.fn((operation: (client: typeof transaction) => unknown) => operation(transaction))
+    };
     const service = new LossesService(prisma as never, { record: auditRecord } as never);
 
     await expect(service.update(ids.entry, { version: 1, quantityKg: 8 }, user)).resolves.toEqual(updated);
@@ -273,8 +292,10 @@ describe("losses operational CRUD", () => {
         action: "update",
         before: current,
         after: updated
-      })
+      }),
+      transaction
     );
+    expect(prisma.$transaction).toHaveBeenCalledWith(expect.any(Function), { isolationLevel: "Serializable" });
   });
 
   it("rejects an order from another week before updating a loss", async () => {
@@ -300,7 +321,8 @@ describe("losses operational CRUD", () => {
     };
     const lossUpdate = vi.fn();
     const auditRecord = vi.fn();
-    const prisma = {
+    const transaction = {
+      $queryRaw: vi.fn().mockResolvedValue([{ id: ids.entry }]),
       lossEntry: {
         findUnique: vi.fn().mockResolvedValue(current),
         update: lossUpdate
@@ -333,6 +355,10 @@ describe("losses operational CRUD", () => {
         })
       }
     };
+    const prisma = {
+      ...transaction,
+      $transaction: vi.fn((operation: (client: typeof transaction) => unknown) => operation(transaction))
+    };
     const service = new LossesService(prisma as never, { record: auditRecord } as never);
 
     await expect(service.update(ids.entry, { version: 1, productionOrderId: ids.otherOrder }, user)).rejects.toThrow("pertencer a semana");
@@ -352,11 +378,16 @@ describe("losses operational CRUD", () => {
     const restored = { ...current, deletedAt: null };
     const lossUpdate = vi.fn().mockResolvedValue(restored);
     const auditRecord = vi.fn().mockResolvedValue(undefined);
-    const prisma = {
+    const transaction = {
+      $queryRaw: vi.fn().mockResolvedValue([{ id: ids.entry }]),
       lossEntry: {
         findUnique: vi.fn().mockResolvedValue(current),
         update: lossUpdate
       }
+    };
+    const prisma = {
+      ...transaction,
+      $transaction: vi.fn((operation: (client: typeof transaction) => unknown) => operation(transaction))
     };
     const service = new LossesService(prisma as never, { record: auditRecord } as never);
 
@@ -371,7 +402,8 @@ describe("losses operational CRUD", () => {
         action: "restore",
         before: current,
         after: restored
-      })
+      }),
+      transaction
     );
   });
 });
@@ -390,6 +422,8 @@ describe("downtime operational CRUD", () => {
       sector: { id: ids.sector, code: "P1" },
       lineId: ids.line,
       line: { id: ids.line },
+      equipmentId: ids.equipment,
+      equipment: { id: ids.equipment },
       productionStart: new Date("2026-05-05T08:00:00.000Z"),
       productionEnd: new Date("2026-05-05T16:00:00.000Z"),
       downtimeStart: new Date("2026-05-05T10:00:00.000Z"),
@@ -407,7 +441,8 @@ describe("downtime operational CRUD", () => {
     };
     const downtimeUpdate = vi.fn().mockResolvedValue(updated);
     const auditRecord = vi.fn().mockResolvedValue(undefined);
-    const prisma = {
+    const transaction = {
+      $queryRaw: vi.fn().mockResolvedValue([]),
       downtimeEntry: {
         findUnique: vi.fn().mockResolvedValue(current),
         findFirst: vi.fn().mockResolvedValue(null),
@@ -418,9 +453,21 @@ describe("downtime operational CRUD", () => {
         findUnique: vi.fn().mockResolvedValue({ id: ids.sector, code: "P1" })
       },
       productionLine: { findUnique: vi.fn() },
+      equipment: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: ids.equipment,
+          productionLineId: null,
+          productionLine: null,
+          active: true,
+          deletedAt: null
+        })
+      },
       downtimeReason: {
         findUnique: vi.fn().mockResolvedValue({ id: ids.reason, active: true })
       }
+    };
+    const prisma = {
+      $transaction: vi.fn((operation: (client: typeof transaction) => unknown) => operation(transaction))
     };
     const service = new DowntimeService(prisma as never, { record: auditRecord } as never);
 
@@ -432,7 +479,8 @@ describe("downtime operational CRUD", () => {
         realKgHour: 75
       }
     });
-    expect(prisma.productionLine.findUnique).not.toHaveBeenCalled();
+    expect(transaction.productionLine.findUnique).not.toHaveBeenCalled();
+    expect(transaction.$queryRaw).toHaveBeenCalledOnce();
     expect(downtimeUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
@@ -449,18 +497,23 @@ describe("downtime operational CRUD", () => {
         action: "update",
         before: current,
         after: updated
-      })
+      }),
+      transaction
     );
+    expect(prisma.$transaction).toHaveBeenCalledWith(expect.any(Function), { isolationLevel: "Serializable" });
   });
 
   it("rejects a downtime interval outside the production window", async () => {
     const downtimeCreate = vi.fn();
-    const prisma = {
+    const transaction = {
       weeklyPeriod: { findUnique: vi.fn().mockResolvedValue(week) },
       downtimeEntry: { create: downtimeCreate },
       sector: { findUnique: vi.fn() },
       productionLine: { findUnique: vi.fn() },
       downtimeReason: { findUnique: vi.fn() }
+    };
+    const prisma = {
+      $transaction: vi.fn((operation: (client: typeof transaction) => unknown) => operation(transaction))
     };
     const service = new DowntimeService(prisma as never, { record: vi.fn() } as never);
 
@@ -469,6 +522,7 @@ describe("downtime operational CRUD", () => {
         weekId: ids.week,
         date: "2026-05-05",
         sector: "P1",
+        lineId: ids.line,
         productionStart: "2026-05-05T08:00:00.000Z",
         productionEnd: "2026-05-05T16:00:00.000Z",
         downtimeStart: "2026-05-05T07:00:00.000Z",
@@ -482,7 +536,7 @@ describe("downtime operational CRUD", () => {
 
   it("rejects overlapping downtime entries for the same production line", async () => {
     const downtimeCreate = vi.fn();
-    const prisma = {
+    const transaction = {
       weeklyPeriod: { findUnique: vi.fn().mockResolvedValue(week) },
       downtimeEntry: {
         findFirst: vi.fn().mockResolvedValue({ id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc" }),
@@ -502,6 +556,9 @@ describe("downtime operational CRUD", () => {
       downtimeReason: {
         findUnique: vi.fn().mockResolvedValue({ id: ids.reason, active: true })
       }
+    };
+    const prisma = {
+      $transaction: vi.fn((operation: (client: typeof transaction) => unknown) => operation(transaction))
     };
     const service = new DowntimeService(prisma as never, { record: vi.fn() } as never);
 

@@ -32,22 +32,37 @@ O login do Pages (`admin@demo.nexus.local` / `NexusDemo@2026`) e deliberadamente
 ## Docker Compose completo
 
 1. Crie um `.env` a partir de `.env.example`.
-2. Troque os segredos antes de usar em producao:
+2. Gere segredos independentes. Nao copie os valores do ambiente de demonstracao e nao reutilize uma chave para duas finalidades:
+
+```bash
+openssl rand -hex 32
+openssl rand -base64 48
+openssl rand -base64 32
+```
+
+Use, respectivamente, as saidas em `POSTGRES_PASSWORD`, `JWT_ACCESS_SECRET` e `BACKUP_ENCRYPTION_KEY`. O valor hexadecimal do PostgreSQL evita caracteres que precisariam de escape dentro da URL.
+
+3. Preencha as demais configuracoes antes de usar em producao:
 
 - `POSTGRES_PASSWORD`
 - `JWT_ACCESS_SECRET`
 - `WEB_ORIGIN`
-- `DATABASE_URL`
 - `BACKUP_DIR`
+- `BACKUP_ENCRYPTION_KEY` (32 bytes em base64 ou 64 caracteres hexadecimais)
+- `BACKUP_EXTERNAL_DIR` quando houver volume externo/NAS montado
 - `IMPORT_UPLOAD_DIR`
 
-3. Suba os servicos:
+O Compose monta `DATABASE_URL` internamente com `POSTGRES_USER`, `POSTGRES_PASSWORD` e `POSTGRES_DB`. Em deploy direto da API, fora do Compose, defina uma `DATABASE_URL` PostgreSQL completa e codifique caracteres especiais da senha para URL.
+
+`POSTGRES_PASSWORD` e `JWT_ACCESS_SECRET` usam a expansao obrigatoria `${VAR:?mensagem}`. Ausencia ou valor vazio interrompe `docker compose config/up` antes da criacao dos containers; nao existe senha conhecida como fallback. A API faz uma segunda barreira ao iniciar com `NODE_ENV=production`: exige JWT e senha da `DATABASE_URL` com pelo menos 32 caracteres e rejeita valores previsiveis como `change-this`, `replace-with`, `placeholder`, `example` ou segredos repetitivos. A mensagem de erro identifica somente a variavel, nunca revela o segredo.
+
+4. Suba os servicos:
 
 ```bash
 docker compose up -d --build
 ```
 
-4. Aplique migrations e seed:
+5. Aplique migrations e seed:
 
 ```bash
 docker compose exec api npx prisma migrate deploy
@@ -78,9 +93,11 @@ O inspetor valida a estrutura XLSX antes do parser, ambos executam em copia temp
 
 ## Backups
 
-O Compose monta o volume `nexus-backups` em `/app/backups` na API. O endpoint usa `BACKUP_DIR` e registra tamanho e checksum. A captura le todas as tabelas em uma transacao `REPEATABLE READ`; diretorio e arquivo recebem permissoes `0700`/`0600`, e o container da API executa como usuario `node`, nao root.
+O Compose monta o volume `nexus-backups` em `/app/backups` na API. O endpoint usa `BACKUP_DIR`, criptografa cada snapshot com AES-256-GCM e registra tamanho e checksum do envelope cifrado. A captura le todas as tabelas em uma transacao `REPEATABLE READ`; diretorio e arquivo recebem permissoes `0700`/`0600`, e o container da API executa como usuario `node`, nao root. Gere uma chave com `openssl rand -base64 32`, guarde-a fora do repositorio e defina um identificador em `BACKUP_ENCRYPTION_KEY_ID`.
 
-Com `BACKUP_SCHEDULE_ENABLED=true`, um snapshot e criado diariamente as 02:00 e a retencao mantem `BACKUP_RETENTION_COUNT`. `POST /api/backups/:id/restore-rehearsal` valida checksum, formato, tipos e contagens em tabelas temporarias sem alterar dados reais. Antes da liberacao de producao, ainda e obrigatorio ensaiar uma restauracao real em PostgreSQL separado e documentar RPO/RTO.
+Quando `BACKUP_EXTERNAL_DIR` aponta para um volume externo montado, a API cria uma segunda copia cifrada e compara o SHA-256 byte a byte. Se o arquivo primario desaparecer, verificacao e ensaio usam a copia externa. Um diretorio no mesmo disco nao conta como protecao externa; em producao, monte NAS, volume remoto ou agente de sincronizacao protegido.
+
+Com `BACKUP_SCHEDULE_ENABLED=true`, um snapshot e criado diariamente as 02:00 e a retencao mantem `BACKUP_RETENTION_COUNT`. `POST /api/backups/:id/restore-rehearsal` valida checksum, autenticidade GCM, formato, tipos e contagens em tabelas temporarias sem alterar dados reais. Backups JSON legados continuam legiveis, mas toda nova captura e obrigatoriamente cifrada. Antes da liberacao de producao, ainda e obrigatorio ensaiar uma restauracao real em PostgreSQL separado e documentar RPO/RTO.
 
 ## Dominio
 

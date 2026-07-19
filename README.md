@@ -23,6 +23,11 @@ PowerShell may block `npm.ps1`; use `npm.cmd`.
 cd .\nexus-operacional
 npm.cmd install
 Copy-Item .env.example .env
+```
+
+Before running Prisma locally, fill `POSTGRES_PASSWORD`, `DATABASE_URL`, `JWT_ACCESS_SECRET` and `INITIAL_ADMIN_PASSWORD` in `.env`. The database URL must contain the same PostgreSQL password.
+
+```powershell
 npm.cmd run prisma:generate
 npm.cmd run prisma:migrate
 npm.cmd run prisma:seed
@@ -43,13 +48,23 @@ Create a local `.env` from the example and update secrets and public URLs:
 copy .env.example .env
 ```
 
+Generate independent secrets, then place them in `.env` (the example intentionally leaves them blank):
+
+```bash
+openssl rand -hex 32
+openssl rand -base64 48
+```
+
 Edit `.env` and set:
-- `POSTGRES_PASSWORD`
-- `JWT_ACCESS_SECRET`
-- `JWT_REFRESH_SECRET`
+
+- `POSTGRES_PASSWORD` to the hexadecimal value
+- `JWT_ACCESS_SECRET` to the independent base64 value
 - `WEB_ORIGIN` to your public frontend URL
 - `NEXT_PUBLIC_API_URL` to your public API URL
-- `DATABASE_URL` to point to your production database
+
+Docker Compose constructs the API `DATABASE_URL` from `POSTGRES_USER`, `POSTGRES_PASSWORD` and `POSTGRES_DB`. A direct API deployment outside Compose must set `DATABASE_URL` explicitly with a strong database password.
+
+Compose stops before creating containers when either required secret is empty. The API also refuses to start with `NODE_ENV=production` when the JWT secret or database password is missing, shorter than 32 characters or resembles a known placeholder. Development keeps its isolated fallback only when `NODE_ENV` is not `production`.
 
 Then start the stack:
 

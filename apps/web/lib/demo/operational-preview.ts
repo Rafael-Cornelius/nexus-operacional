@@ -24,8 +24,8 @@ export const demoDashboardKpis = {
     }
   },
   financialBySector: [
-    { sector: "P1", producedKg: 12840, lossesKg: 29, overweightKg: 19, productionCost: 71904, lossesCost: 162.4, overweightCost: 106.4 },
-    { sector: "P2", producedKg: 5580, lossesKg: 13, overweightKg: 9, productionCost: 31248, lossesCost: 72.8, overweightCost: 50.4 }
+    { sector: "P1", producedKg: 12840, lossesKg: 29, overweightKg: 19, productionCost: 71904, lossesCost: 162.4, overweightCost: 106.4, totalImpactCost: 268.8 },
+    { sector: "P2", producedKg: 5580, lossesKg: 13, overweightKg: 9, productionCost: 31248, lossesCost: 72.8, overweightCost: 50.4, totalImpactCost: 123.2 }
   ]
 };
 

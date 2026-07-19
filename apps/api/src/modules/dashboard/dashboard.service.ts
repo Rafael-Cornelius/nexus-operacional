@@ -1,6 +1,14 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../../infrastructure/database/prisma.service";
 import { GoalsService } from "../goals/goals.service";
+import { calculateDashboardFinancials } from "../../domain/calculations/financial-calculations";
+import {
+  calculateLossPercent,
+  calculateRelativeVariation,
+  DASHBOARD_CALCULATION_RULE_VERSIONS
+} from "../../domain/calculations/dashboard-calculations";
+import { sumDecimalNumbers } from "../../domain/calculations/decimal";
+import { CALCULATION_RULES } from "../../domain/calculations/rule-registry";
 
 function n(value: unknown): number {
   return Number(value ?? 0);
@@ -66,18 +74,27 @@ export class DashboardService {
     const registeredLossesKg = n(registeredLosses._sum.quantityKg);
     const lossesTotalKg = weighingLossesKg + registeredLossesKg;
     const productionCost = n(production._sum.productionCost);
-    const lossesCost = n(production._sum.lossesCost) + n(registeredLosses._sum.lossCost);
+    const lossesCost = sumDecimalNumbers(2, production._sum.lossesCost, registeredLosses._sum.lossCost);
     const overweightCost = n(production._sum.overweightCost);
+    const financialRules = calculateDashboardFinancials({
+      productionCost: production._sum.productionCost,
+      productionTotalKg: production._sum.producedKg,
+      lossesCost,
+      overweightCost: production._sum.overweightCost
+    });
     const bySector = productionBySector.map((row) => {
       const directLoss = lossesBySector.find((loss) => loss.sectorId === row.sectorId);
+      const sectorLossesCost = sumDecimalNumbers(2, row._sum.lossesCost, directLoss?._sum.lossCost);
+      const sectorOverweightCost = n(row._sum.overweightCost);
       return {
         sector: sectors.find((sector) => sector.id === row.sectorId)?.code ?? row.sectorId,
         producedKg: n(row._sum.producedKg),
         lossesKg: n(row._sum.weighingLossKg) + n(directLoss?._sum.quantityKg),
         overweightKg: n(row._sum.overweightTotalKg),
         productionCost: n(row._sum.productionCost),
-        lossesCost: n(row._sum.lossesCost) + n(directLoss?._sum.lossCost),
-        overweightCost: n(row._sum.overweightCost)
+        lossesCost: sectorLossesCost,
+        overweightCost: sectorOverweightCost,
+        totalImpactCost: sumDecimalNumbers(2, sectorLossesCost, sectorOverweightCost)
       };
     });
 
@@ -98,9 +115,9 @@ export class DashboardService {
         productionCost,
         lossesCost,
         overweightCost,
-        totalImpactCost: lossesCost + overweightCost,
-        costPerKg: productionTotalKg ? productionCost / productionTotalKg : 0,
-        lossPercent: productionTotalKg ? lossesTotalKg / productionTotalKg : 0,
+        totalImpactCost: financialRules.totalImpactCost,
+        costPerKg: financialRules.costPerKg,
+        lossPercent: calculateLossPercent(lossesTotalKg, productionTotalKg),
         packaging: {
           lostKg: n(packaging._sum.quantityKg),
           lossCost: n(packaging._sum.lossCost),
@@ -110,6 +127,7 @@ export class DashboardService {
         }
       },
       financialBySector: bySector,
+      calculationRuleVersions: DASHBOARD_CALCULATION_RULE_VERSIONS,
       weeksByStatus: weeks.map((item) => ({ status: item.status, count: item._count }))
     };
   }
@@ -175,7 +193,7 @@ export class DashboardService {
     ].map(({ label, key, improvesWhen }) => {
       const currentValue = currentKpis[key];
       const previousValue = previousKpis?.[key] ?? 0;
-      const variationPercent = previousValue === 0 ? (currentValue === 0 ? 0 : null) : (currentValue - previousValue) / previousValue;
+      const variationPercent = calculateRelativeVariation(currentValue, previousValue);
       const favorable = variationPercent === null || variationPercent === 0 ? "stable" : (improvesWhen === "up") === (variationPercent > 0) ? "up" : "down";
       return { label, key, currentValue, previousValue, variationPercent, trend: favorable, improvesWhen };
     });
@@ -188,6 +206,10 @@ export class DashboardService {
 
   async alerts(weekId?: string) {
     return this.goals.activeAlerts(weekId);
+  }
+
+  calculationRules() {
+    return Object.values(CALCULATION_RULES);
   }
 
   health() {

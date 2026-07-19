@@ -1,6 +1,9 @@
 import { Injectable } from "@nestjs/common";
 import { PrismaService } from "../../infrastructure/database/prisma.service";
-import { calculateAverageKgPerDay } from "../../domain/calculations/productivity-calculations";
+import {
+  calculateAverageKgPerDay,
+  PRODUCTIVITY_CALCULATION_RULE_VERSIONS
+} from "../../domain/calculations/productivity-calculations";
 
 @Injectable()
 export class ProductivityService {
@@ -27,6 +30,7 @@ export class ProductivityService {
       workedDays: days.length,
       averageKgPerDay: calculateAverageKgPerDay(producedKg, days.length),
       records: production._count,
+      calculationRuleVersions: PRODUCTIVITY_CALCULATION_RULE_VERSIONS,
       daily: days.map((day) => ({
         date: day.date,
         producedKg: Number(day._sum.producedKg ?? 0),

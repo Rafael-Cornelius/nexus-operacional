@@ -34,7 +34,7 @@ interface DashboardKpis {
     lossPercent: number;
     packaging: { lostKg: number; lossCost: number; filmUsedKg: number; filmUsedValue: number; financialResult: number };
   };
-  financialBySector: Array<{ sector: string; producedKg: number; lossesKg: number; overweightKg: number; productionCost: number; lossesCost: number; overweightCost: number }>;
+  financialBySector: Array<{ sector: string; producedKg: number; lossesKg: number; overweightKg: number; productionCost: number; lossesCost: number; overweightCost: number; totalImpactCost: number }>;
 }
 
 interface DashboardCharts {
@@ -122,7 +122,7 @@ export function ExecutiveDashboard() {
         setComparison(nextComparison);
         setAlerts(nextAlerts);
         const selectedWeek = weekRows.find((week) => week.id === weekId);
-        setSource(`Dados reais da API — ${selectedWeek?.label ?? "semana selecionada"} (${selectedWeek?.status ?? "status indisponível"}).`);
+        setSource(`Dados reais da API — ${selectedWeek?.label ?? "semana selecionada"} (${selectedWeek?.status ?? "status indisponível"}). Atualizado às ${new Date().toLocaleTimeString("pt-BR")}.`);
       } catch (error) {
         if (!cancelled) {
           setKpis(null);
@@ -135,8 +135,10 @@ export function ExecutiveDashboard() {
     }
 
     void loadDashboard();
+    const refreshTimer = window.setInterval(() => void loadDashboard(), 30_000);
     return () => {
       cancelled = true;
+      window.clearInterval(refreshTimer);
     };
   }, [selectedWeekId]);
 
@@ -192,7 +194,7 @@ export function ExecutiveDashboard() {
         <NexusChart title="Perdas por tipo" option={{ tooltip: { trigger: "item" }, series: [{ type: "pie", radius: ["48%", "72%"], label: { color: "#cbd5e1" }, data: lossTypes.map((item) => ({ name: item.type, value: item.quantityKg })) }] }} />
         <NexusChart title="Custo por setor" option={{ tooltip: { trigger: "axis" }, legend: { textStyle: { color: "#cbd5e1" } }, xAxis: { type: "category", data: kpis?.financialBySector.map((item) => item.sector) ?? [] }, yAxis: { type: "value" }, series: [
           { name: "Produção", type: "bar", data: kpis?.financialBySector.map((item) => item.productionCost) ?? [], itemStyle: { color: "#34d399" } },
-          { name: "Perdas + sobrepeso", type: "bar", data: kpis?.financialBySector.map((item) => item.lossesCost + item.overweightCost) ?? [], itemStyle: { color: "#fb7185" } }
+          { name: "Perdas + sobrepeso", type: "bar", data: kpis?.financialBySector.map((item) => item.totalImpactCost) ?? [], itemStyle: { color: "#fb7185" } }
         ] }} />
       </div>
 

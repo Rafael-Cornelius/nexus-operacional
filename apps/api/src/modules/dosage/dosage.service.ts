@@ -4,13 +4,9 @@ import { PrismaService } from "../../infrastructure/database/prisma.service";
 import { CurrentUser } from "../../infrastructure/security/current-user";
 import { AuditService } from "../audit/audit.service";
 import { assertDateWithinWeek, assertWeekWritable } from "../../domain/weeks/week-rules";
+import { calculateDosage } from "../../domain/calculations/dosage-calculations";
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-function round(value: number, places = 3) {
-  const factor = 10 ** places;
-  return Math.round(value * factor) / factor;
-}
 
 @Injectable()
 export class DosageService {
@@ -49,9 +45,8 @@ export class DosageService {
     if (input.operatorId && (!operator || operator.deletedAt || !operator.active)) throw new NotFoundException("Operador ativo nao encontrado.");
     assertWeekWritable(week, "Semana fechada ou arquivada nao aceita amostras.");
     assertDateWithinWeek(input.date, week, "Data da amostra precisa pertencer à semana selecionada.");
-    const averageWeightG = input.sampleWeightsG.reduce((sum, value) => sum + value, 0) / input.sampleWeightsG.length;
-    const variance = input.sampleWeightsG.reduce((sum, value) => sum + (value - averageWeightG) ** 2, 0) / input.sampleWeightsG.length;
     const targetWeightG = Number(product.weightConfig.targetPackageWeightG);
+    const calculated = calculateDosage(input.sampleWeightsG, targetWeightG);
     const row = await this.prisma.dosageCheck.create({
       data: {
         weekId: input.weekId,
@@ -63,16 +58,17 @@ export class DosageService {
         date: input.date,
         targetWeightG,
         sampleWeightsG: input.sampleWeightsG,
-        sampleCount: input.sampleWeightsG.length,
-        averageWeightG: round(averageWeightG),
-        standardDeviationG: round(Math.sqrt(variance)),
-        overweightG: round(Math.max(averageWeightG - targetWeightG, 0)),
+        sampleCount: calculated.sampleCount,
+        averageWeightG: calculated.averageWeightG,
+        standardDeviationG: calculated.standardDeviationG,
+        overweightG: calculated.overweightG,
+        calculationRuleVersions: { ...calculated.calculationRuleVersions },
         notes: input.notes
       },
       include: { product: { select: { code: true, name: true } }, week: { select: { label: true } }, equipment: true, shift: true }
     });
     await this.audit.record({ userId: this.safeUserId(user), module: "dosage", action: "create", entity: "DosageCheck", entityId: row.id, after: row });
-    return row;
+    return { ...row, calculationRuleVersions: calculated.calculationRuleVersions };
   }
 
   private safeUserId(user?: CurrentUser) {

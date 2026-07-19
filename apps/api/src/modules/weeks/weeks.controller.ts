@@ -21,6 +21,12 @@ export class WeeksController {
   }
 
   @Roles("ADMIN", "MANAGER", "SUPERVISOR")
+  @Patch(":id/review")
+  review(@Param("id") id: string, @CurrentUserData() user?: CurrentUser) {
+    return this.weeks.review(id, user);
+  }
+
+  @Roles("ADMIN", "MANAGER", "SUPERVISOR")
   @Patch(":id/close")
   close(@Param("id") id: string, @CurrentUserData() user?: CurrentUser) {
     return this.weeks.close(id, user);

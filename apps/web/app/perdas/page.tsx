@@ -30,6 +30,11 @@ interface LossEntryRow extends WorkflowEntry {
   id: string;
   date: string;
   quantityKg: string | number;
+  filmShift1Kg?: string | number | null;
+  filmShift2Kg?: string | number | null;
+  boxLossUnits?: string | number | null;
+  boxLossShift1Units?: string | number | null;
+  boxLossShift2Units?: string | number | null;
   reason?: string | null;
   sector?: { code: string } | null;
   lossType?: { name: string };
@@ -51,13 +56,18 @@ export default function LossesPage() {
   const [lossTypeId, setLossTypeId] = useState("");
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [sector, setSector] = useState<"P1" | "P2">("P1");
-  const [quantityKg, setQuantityKg] = useState(10);
+  const [filmShift1Kg, setFilmShift1Kg] = useState(10);
+  const [filmShift2Kg, setFilmShift2Kg] = useState(0);
+  const [boxLossShift1Units, setBoxLossShift1Units] = useState(0);
+  const [boxLossShift2Units, setBoxLossShift2Units] = useState(0);
   const [productId, setProductId] = useState("");
   const [packedBoxes, setPackedBoxes] = useState(0);
   const [reason, setReason] = useState("Lancamento operacional");
   const [message, setMessage] = useState("Carregando perdas da API.");
   const [loading, setLoading] = useState(false);
   const session = useMemo(() => getSession(), []);
+  const quantityKg = filmShift1Kg + filmShift2Kg;
+  const boxLossUnits = boxLossShift1Units + boxLossShift2Units;
 
   async function loadData(nextWeekId = weekId) {
     const requestedWeek = nextWeekId || weekId;
@@ -118,8 +128,8 @@ export default function LossesPage() {
   }, []);
 
   async function saveLoss() {
-    if (!session || !weekId || !lossTypeId) {
-      setMessage("Entre no sistema e selecione semana/tipo para salvar.");
+    if (!session || !weekId || !lossTypeId || !productId) {
+      setMessage("Entre no sistema e selecione semana, tipo e produto com preco aprovado.");
       return;
     }
     if (DEMO_MODE) {
@@ -129,6 +139,11 @@ export default function LossesPage() {
         id: `demo-loss-${Date.now()}`,
         date: `${date}T00:00:00.000Z`,
         quantityKg,
+        filmShift1Kg,
+        filmShift2Kg,
+        boxLossUnits,
+        boxLossShift1Units,
+        boxLossShift2Units,
         reason,
         sector: { code: sector },
         lossType: selectedType,
@@ -145,7 +160,21 @@ export default function LossesPage() {
     }
     setLoading(true);
     try {
-      await apiPostClient("/losses", { weekId, date, sector, productId: productId || undefined, lossTypeId, quantityKg, packedBoxes, reason });
+      await apiPostClient("/losses", {
+        weekId,
+        date,
+        sector,
+        productId: productId || undefined,
+        lossTypeId,
+        quantityKg,
+        filmShift1Kg,
+        filmShift2Kg,
+        boxLossUnits,
+        boxLossShift1Units,
+        boxLossShift2Units,
+        packedBoxes,
+        reason
+      });
       await loadData(weekId);
       setMessage("Perda registrada e auditada.");
     } catch (error) {
@@ -155,16 +184,22 @@ export default function LossesPage() {
     }
   }
 
-  const total = entries.reduce((sum, entry) => sum + Number(entry.quantityKg), 0);
+  const approvedEntries = entries.filter((entry) => entry.workflowStatus === "APPROVED");
+  const total = approvedEntries.reduce((sum, entry) => sum + Number(entry.quantityKg), 0);
   const lossGoal = goalVisualState(alerts, ["losses_kg", "loss"], formatKg);
   const uniqueLossGoal = uniqueOperationalGoal(alerts, ["losses_kg", "loss"]);
+  const optionalKg = (value: string | number | null | undefined) => value === null || value === undefined ? "-" : formatKg(Number(value));
+  const optionalUnits = (value: string | number | null | undefined) => value === null || value === undefined ? "-" : Number(value).toLocaleString("pt-BR");
   const rows = entries.length
     ? entries.map((entry) => ({
         Data: entry.date.slice(0, 10),
         Setor: entry.sector?.code ?? "-",
         Tipo: entry.lossType?.name ?? "-",
         Produto: entry.product ? `${entry.product.code} - ${entry.product.name}` : "-",
-        Quantidade: formatKg(Number(entry.quantityKg)),
+        "Filme total": formatKg(Number(entry.quantityKg)),
+        "Filme T1/T2": `${optionalKg(entry.filmShift1Kg)} / ${optionalKg(entry.filmShift2Kg)}`,
+        "Caixas perdidas": optionalUnits(entry.boxLossUnits),
+        "Caixa T1/T2": `${optionalUnits(entry.boxLossShift1Units)} / ${optionalUnits(entry.boxLossShift2Units)}`,
         Custo: formatCurrency(Number(entry.lossCost ?? 0)),
         "Filme aproveitado": formatKg(Number(entry.filmUsedKg ?? 0)),
         Resultado: formatCurrency(Number(entry.financialResult ?? 0)),
@@ -186,7 +221,7 @@ export default function LossesPage() {
           />
         )
       }))
-    : [{ Data: "-", Setor: "-", Tipo: "Nenhuma perda carregada.", Produto: "-", Quantidade: "-", Custo: "-", "Filme aproveitado": "-", Resultado: "-", Motivo: "-", Fluxo: <span>-</span> }];
+    : [{ Data: "-", Setor: "-", Tipo: "Nenhuma perda carregada.", Produto: "-", "Filme total": "-", "Filme T1/T2": "-", "Caixas perdidas": "-", "Caixa T1/T2": "-", Custo: "-", "Filme aproveitado": "-", Resultado: "-", Motivo: "-", Fluxo: <span>-</span> }];
 
   return (
     <div className="space-y-6">
@@ -196,9 +231,14 @@ export default function LossesPage() {
           <Select label="Semana" value={weekId} onChange={(value) => { setWeekId(value); void loadData(value); }} options={weeks.map((week) => ({ value: week.id, label: `${week.label} - ${week.status}` }))} />
           <Select label="Tipo" value={lossTypeId} onChange={setLossTypeId} options={types.map((type) => ({ value: type.id, label: type.name }))} />
           <Select label="Setor" value={sector} onChange={(value) => setSector(value as "P1" | "P2")} options={[{ value: "P1", label: "P1" }, { value: "P2", label: "P2" }]} />
-          <Select label="Produto (para custo)" value={productId} onChange={setProductId} options={[{ value: "", label: "Não informado" }, ...products.filter((product) => !product.defaultSector || product.defaultSector.code === sector).map((product) => ({ value: product.id, label: `${product.code} - ${product.name}` }))]} />
+          <Select label="Produto (preco aprovado)" value={productId} onChange={setProductId} options={products.filter((product) => !product.defaultSector || product.defaultSector.code === sector).map((product) => ({ value: product.id, label: `${product.code} - ${product.name}` }))} />
           <Input label="Data" type="date" value={date} onChange={setDate} />
-          <NumberInput label="Kg" value={quantityKg} onChange={setQuantityKg} />
+          <NumberInput label="Filme total (kg)" value={quantityKg} onChange={() => undefined} disabled />
+          <NumberInput label="Filme T1 (kg)" value={filmShift1Kg} onChange={setFilmShift1Kg} />
+          <NumberInput label="Filme T2 (kg)" value={filmShift2Kg} onChange={setFilmShift2Kg} />
+          <NumberInput label="Caixas perdidas (un)" value={boxLossUnits} onChange={() => undefined} disabled />
+          <NumberInput label="Caixas T1 (un)" value={boxLossShift1Units} onChange={setBoxLossShift1Units} />
+          <NumberInput label="Caixas T2 (un)" value={boxLossShift2Units} onChange={setBoxLossShift2Units} />
         </div>
         <div className="mt-4 flex flex-wrap gap-3">
           <Input label="Motivo" value={reason} onChange={setReason} />
@@ -216,7 +256,7 @@ export default function LossesPage() {
       </Card>
       <div className="grid gap-4 md:grid-cols-3">
         <StatCard label="Perdas da semana" value={formatKg(total)} hint={lossGoal.hint} status={lossGoal.status} />
-        <StatCard label="Registros" value={String(entries.length)} />
+        <StatCard label="Registros aprovados" value={`${approvedEntries.length} de ${entries.length}`} />
         <StatCard label="Meta semanal" value={uniqueLossGoal ? formatKg(uniqueLossGoal.target) : "Não definida"} hint={lossGoal.hint} status={lossGoal.status} />
       </div>
       <DataTable title="Perdas" rows={rows} />
@@ -245,11 +285,11 @@ function Input({ label, value, onChange, type = "text" }: { label: string; value
   );
 }
 
-function NumberInput({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
+function NumberInput({ label, value, onChange, disabled = false }: { label: string; value: number; onChange: (value: number) => void; disabled?: boolean }) {
   return (
     <label className="space-y-2">
       <span className="text-xs uppercase text-slate-400">{label}</span>
-      <input type="number" className="w-full rounded-md border border-[var(--line)] bg-white/5 px-3 py-2 text-sm outline-none focus:border-cyan-300/60" value={value} onChange={(event) => onChange(Number(event.target.value))} />
+      <input type="number" min="0" disabled={disabled} className="w-full rounded-md border border-[var(--line)] bg-white/5 px-3 py-2 text-sm outline-none focus:border-cyan-300/60 disabled:opacity-60" value={value} onChange={(event) => onChange(Number(event.target.value))} />
     </label>
   );
 }

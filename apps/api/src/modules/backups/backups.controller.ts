@@ -19,7 +19,7 @@ export class BackupsController {
     return this.backups.create(user);
   }
 
-  @Get(":id/verify")
+  @Post(":id/verify")
   verify(@Param("id") id: string, @CurrentUserData() user?: CurrentUser) {
     return this.backups.verify(id, user);
   }

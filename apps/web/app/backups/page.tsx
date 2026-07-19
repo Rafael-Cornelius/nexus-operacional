@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Download, RefreshCw, ShieldCheck } from "lucide-react";
+import { DatabaseBackup, Download, RefreshCw, ShieldCheck } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { DataTable } from "@/components/tables/data-table";
 import { Button } from "@/components/ui/button";
@@ -28,6 +28,25 @@ interface BackupListResponse {
     storageBytes: string;
     latestCreatedAt: string | null;
   };
+}
+
+interface BackupVerification {
+  id: string;
+  format: string;
+  generatedAt: string;
+  tableCount: number;
+  rowCount: number;
+  checksumValid: boolean;
+  encrypted: boolean;
+  storage: "primary" | "external";
+}
+
+interface RestoreRehearsal {
+  backupId: string;
+  status: string;
+  destructive: boolean;
+  tableCount: number;
+  rowCount: number;
 }
 
 function formatBytes(value: string | null) {
@@ -57,6 +76,10 @@ export default function BackupsPage() {
   });
   const [message, setMessage] = useState("Aguardando login para carregar backups reais.");
   const [loading, setLoading] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [verification, setVerification] = useState<BackupVerification | null>(null);
+  const [rehearsal, setRehearsal] = useState<RestoreRehearsal | null>(null);
+  const isAdmin = session?.user.roles.includes("ADMIN") ?? false;
 
   async function loadBackups() {
     if (!session) return;
@@ -86,7 +109,7 @@ export default function BackupsPage() {
     }
 
     setLoading(true);
-    setMessage("Gerando snapshot JSON do banco...");
+    setMessage("Gerando snapshot consistente e criptografado do banco...");
     try {
       const backup = await apiPostClient<BackupRow>("/backups", {});
       setMessage(`Backup gerado: ${backup.fileName}`);
@@ -98,11 +121,40 @@ export default function BackupsPage() {
     }
   }
 
+  async function verifyBackup(id: string) {
+    setBusyId(id);
+    setVerification(null);
+    try {
+      const result = await apiPostClient<BackupVerification>(`/backups/${id}/verify`, {});
+      setVerification(result);
+      setMessage(`Checksum e autenticidade confirmados em ${result.storage === "external" ? "copia externa" : "armazenamento primario"}.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Falha ao verificar backup.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function rehearseRestore(id: string) {
+    if (!isAdmin) return setMessage("Somente ADMIN pode executar ensaio de restauracao.");
+    setBusyId(id);
+    setRehearsal(null);
+    try {
+      const result = await apiPostClient<RestoreRehearsal>(`/backups/${id}/restore-rehearsal`, {});
+      setRehearsal(result);
+      setMessage(`Ensaio nao destrutivo aprovado: ${result.rowCount.toLocaleString("pt-BR")} linhas validadas.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Falha no ensaio de restauracao.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   const latest = summary.latestCreatedAt ? new Date(summary.latestCreatedAt).toLocaleString("pt-BR") : "-";
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Backups" description="Snapshots auditaveis do banco com checksum, tamanho e historico de geracao." />
+      <PageHeader title="Backups" description="Snapshots consistentes, criptografados e auditaveis, com checksum e copia externa opcional." />
 
       <div className="flex flex-wrap gap-3">
         <Button type="button" onClick={createBackup} disabled={loading}>
@@ -117,6 +169,16 @@ export default function BackupsPage() {
 
       <Card>
         <p className="text-sm text-slate-300">{message}</p>
+        {verification ? (
+          <p className="mt-2 text-xs text-emerald-200">
+            Verificado: {verification.tableCount} tabelas · {verification.rowCount.toLocaleString("pt-BR")} linhas · AES-GCM {verification.encrypted ? "ativo" : "legado sem criptografia"}.
+          </p>
+        ) : null}
+        {rehearsal ? (
+          <p className="mt-2 text-xs text-cyan-200">
+            {rehearsal.status}: {rehearsal.tableCount} tabelas · destrutivo: {rehearsal.destructive ? "sim" : "nao"}.
+          </p>
+        ) : null}
       </Card>
 
       <div className="grid gap-4 md:grid-cols-4">
@@ -139,7 +201,19 @@ export default function BackupsPage() {
           Tamanho: formatBytes(backup.sizeBytes),
           Checksum: shortChecksum(backup.checksum),
           Criado: new Date(backup.createdAt).toLocaleString("pt-BR"),
-          Destino: backup.filePath
+          Destino: backup.filePath,
+          Acoes: (
+            <span className="flex flex-wrap gap-2">
+              <Button type="button" variant="secondary" onClick={() => verifyBackup(backup.id)} disabled={busyId === backup.id || backup.status !== "COMPLETED"}>
+                <ShieldCheck className="size-4" /> Verificar
+              </Button>
+              {isAdmin ? (
+                <Button type="button" variant="secondary" onClick={() => rehearseRestore(backup.id)} disabled={busyId === backup.id || backup.status !== "COMPLETED"}>
+                  <DatabaseBackup className="size-4" /> Ensaiar
+                </Button>
+              ) : null}
+            </span>
+          )
         }))}
       />
     </div>

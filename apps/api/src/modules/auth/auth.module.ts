@@ -1,26 +1,26 @@
 import { Module } from "@nestjs/common";
+import { ConfigModule, ConfigService } from "@nestjs/config";
 import { JwtModule } from "@nestjs/jwt";
+import { resolveJwtAccessSecret } from "../../config/production-secrets";
 import { AuthController } from "./auth.controller";
 import { AuthService } from "./auth.service";
 import { JwtAuthGuard } from "./jwt-auth.guard";
 import { RolesGuard } from "./roles.guard";
 import { AuditModule } from "../audit/audit.module";
 
-function jwtAccessSecret() {
-  const secret = process.env.JWT_ACCESS_SECRET;
-  if (secret) return secret;
-  if (process.env.NODE_ENV === "production") {
-    throw new Error("JWT_ACCESS_SECRET must be set in production.");
-  }
-  return "dev-access-secret";
-}
-
 @Module({
   imports: [
     AuditModule,
-    JwtModule.register({
-      secret: jwtAccessSecret(),
-      signOptions: { expiresIn: (process.env.JWT_ACCESS_TTL ?? "15m") as never }
+    ConfigModule,
+    JwtModule.registerAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        secret: resolveJwtAccessSecret({
+          NODE_ENV: config.get<string>("NODE_ENV"),
+          JWT_ACCESS_SECRET: config.get<string>("JWT_ACCESS_SECRET")
+        }),
+        signOptions: { expiresIn: (config.get<string>("JWT_ACCESS_TTL") ?? "15m") as never }
+      })
     })
   ],
   controllers: [AuthController],

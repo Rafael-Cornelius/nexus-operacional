@@ -44,7 +44,10 @@ export function isApiConflict(error: unknown): error is ApiClientError {
 
 async function parseError(response: Response, fallback: string) {
   const body = await response.json().catch(() => null);
-  return typeof body?.message === "string" ? body.message : fallback;
+  if (typeof body?.message === "string") return body.message;
+  if (Array.isArray(body?.message)) return body.message.filter((item: unknown) => typeof item === "string").join(" ") || fallback;
+  if (typeof body?.message?.message === "string") return body.message.message;
+  return fallback;
 }
 
 export async function apiGet<T>(path: string, fallback: T): Promise<T> {

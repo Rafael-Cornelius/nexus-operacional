@@ -42,4 +42,10 @@ export class DashboardController {
   alerts(@Query("weekId") weekId?: string) {
     return this.dashboard.alerts(weekId);
   }
+
+  @Roles("ADMIN", "MANAGER", "SUPERVISOR", "VIEWER")
+  @Get("dashboard/calculation-rules")
+  calculationRules() {
+    return this.dashboard.calculationRules();
+  }
 }

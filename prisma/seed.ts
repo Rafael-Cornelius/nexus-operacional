@@ -154,20 +154,6 @@ async function main() {
     });
   }
 
-  for (const goal of [
-    { name: "Sobrepeso maximo", metric: "overweight", targetValue: 0.02, comparator: "<=" },
-    { name: "Perdas maximas", metric: "losses_kg", targetValue: 50, comparator: "<=" },
-    { name: "Rendimento minimo", metric: "yield", targetValue: 0.95, comparator: ">=" },
-    { name: "Producao semanal minima", metric: "produced_kg", targetValue: 20000, comparator: ">=" }
-  ]) {
-    const existing = await prisma.goal.findFirst({ where: { metric: goal.metric, sectorCode: null } });
-    if (existing) {
-      await prisma.goal.update({ where: { id: existing.id }, data: goal });
-    } else {
-      await prisma.goal.create({ data: goal });
-    }
-  }
-
   const demoProduct = await prisma.product.upsert({
     where: { code: "72169" },
     create: {

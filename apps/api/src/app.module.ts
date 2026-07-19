@@ -28,10 +28,11 @@ import { ShiftsModule } from "./modules/shifts/shifts.module";
 import { ReconciliationModule } from "./modules/reconciliation/reconciliation.module";
 import { JwtAuthGuard } from "./modules/auth/jwt-auth.guard";
 import { RolesGuard } from "./modules/auth/roles.guard";
+import { validateProductionEnvironment } from "./config/production-secrets";
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true }),
+    ConfigModule.forRoot({ isGlobal: true, cache: true, validate: validateProductionEnvironment }),
     ScheduleModule.forRoot(),
     RequestContextModule,
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 120 }]),

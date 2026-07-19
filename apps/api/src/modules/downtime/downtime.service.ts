@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { PrismaService } from "../../infrastructure/database/prisma.service";
@@ -35,6 +35,8 @@ const downtimeEntryUpdateSchema = downtimeEntrySchema
     message: "Informe ao menos um campo para atualizar."
   });
 const downtimeCalculationNotes = new Set(["Termino da producao menor que inicio da producao.", "Termino da parada menor que inicio da parada.", "Tempo disponivel zerado."]);
+const downtimeEquipmentOverlapConstraint = "downtime_entries_no_equipment_overlap";
+const downtimeLineOverlapConstraint = "downtime_entries_no_line_overlap_without_equipment";
 
 type DowntimeEntryInput = z.infer<typeof downtimeEntrySchema>;
 
@@ -45,6 +47,26 @@ function userNotes(value?: string | null) {
 
 function notesWithCalculations(value: string | undefined, inconsistencies: string[]) {
   return [userNotes(value), ...inconsistencies].filter(Boolean).join("\n") || undefined;
+}
+
+function databaseErrorText(error: unknown) {
+  if (!error || typeof error !== "object") return String(error ?? "");
+  const candidate = error as { code?: unknown; message?: unknown; meta?: unknown; cause?: unknown };
+  let meta = "";
+  try {
+    meta = JSON.stringify(candidate.meta ?? candidate.cause ?? "");
+  } catch {
+    meta = String(candidate.meta ?? candidate.cause ?? "");
+  }
+  return [candidate.code, candidate.message, meta].map((value) => String(value ?? "")).join(" ");
+}
+
+export function downtimeOverlapConstraint(error: unknown): "equipment" | "line" | "unknown" | null {
+  const text = databaseErrorText(error);
+  if (text.includes(downtimeEquipmentOverlapConstraint)) return "equipment";
+  if (text.includes(downtimeLineOverlapConstraint)) return "line";
+  if (/\b23P01\b/.test(text) || /exclusion constraint/i.test(text)) return "unknown";
+  return null;
 }
 
 @Injectable()
@@ -84,16 +106,96 @@ export class DowntimeService {
 
   async create(payload: unknown, user?: CurrentUser) {
     const input = downtimeEntrySchema.parse(payload);
-    const resolved = await this.resolveEntry(input);
     const userId = this.safeUserId(user);
-    const entry = await this.prisma.downtimeEntry.create({
-      data: {
+    return this.writeTransaction(async (transaction) => {
+      const resolved = await this.resolveEntry(transaction, input);
+      const entry = await transaction.downtimeEntry.create({
+        data: {
+          weekId: input.weekId,
+          date: input.date,
+          sectorId: resolved.sector.id,
+          lineId: resolved.line?.id,
+          equipmentId: resolved.equipment?.id,
+          shiftId: resolved.shift?.id,
+          productionStart: input.productionStart,
+          productionEnd: input.productionEnd,
+          downtimeStart: input.downtimeStart,
+          downtimeEnd: input.downtimeEnd,
+          producedMassKg: input.producedMassKg,
+          stoppedMinutes: resolved.calculated.stoppedMinutes,
+          stoppedPercent: resolved.calculated.stoppedPercent,
+          realKgHour: resolved.calculated.realKgHour,
+          possibleKgHour: resolved.calculated.possibleKgHour,
+          calculationRuleVersions: { ...resolved.calculated.calculationRuleVersions },
+          status: resolved.calculated.status,
+          workflowStatus: "DRAFT",
+          downtimeReasonId: input.downtimeReasonId,
+          notes: notesWithCalculations(input.notes, resolved.calculated.inconsistencies),
+          createdBy: userId,
+          updatedBy: userId
+        },
+        include: { sector: true, reason: true, week: true, line: true, equipment: true, shift: true }
+      });
+      await this.audit.record({
+        userId,
+        module: "downtime",
+        action: "create",
+        entity: "DowntimeEntry",
+        entityId: entry.id,
+        after: entry
+      }, transaction);
+      return { ...entry, calculations: resolved.calculated };
+    });
+  }
+
+  async update(id: string, payload: unknown, user?: CurrentUser) {
+    const patch = downtimeEntryUpdateSchema.parse(payload);
+    const userId = this.safeUserId(user);
+    return this.writeTransaction(async (transaction) => {
+      await this.lockDowntimeEntry(transaction, id);
+      const current = await transaction.downtimeEntry.findUnique({
+        where: { id },
+        include: { week: true, sector: true, line: true, equipment: true, shift: true, reason: true }
+      });
+      if (!current || current.deletedAt) throw new NotFoundException("Parada nao encontrada.");
+      if (current.week.deletedAt) throw new BadRequestException("Semana removida nao permite edicao.");
+      assertWeekWritable(current.week, "Semana fechada ou arquivada nao permite edicao de paradas.");
+      assertCurrentVersion(current.version, patch.version);
+      assertWorkflowState(current.workflowStatus, ["DRAFT", "REJECTED", "APPROVED"], "edicao");
+      assertCanAmendApproved(current.workflowStatus, user?.roles);
+      if (current.workflowStatus === "APPROVED" && !patch.changeReason) {
+        throw new BadRequestException("Alteracao de parada aprovada exige motivo.");
+      }
+
+      const input = downtimeEntrySchema.parse({
+        weekId: patch.weekId ?? current.weekId,
+        date: patch.date ?? current.date,
+        sector: patch.sector ?? current.sector.code,
+        lineId: Object.prototype.hasOwnProperty.call(patch, "lineId") ? (patch.lineId ?? undefined) : (current.lineId ?? undefined),
+        equipmentId: Object.prototype.hasOwnProperty.call(patch, "equipmentId") ? (patch.equipmentId ?? undefined) : (current.equipmentId ?? undefined),
+        shiftId: Object.prototype.hasOwnProperty.call(patch, "shiftId") ? (patch.shiftId ?? undefined) : (current.shiftId ?? undefined),
+        productionStart: patch.productionStart ?? current.productionStart,
+        productionEnd: patch.productionEnd ?? current.productionEnd,
+        downtimeStart: patch.downtimeStart ?? current.downtimeStart,
+        downtimeEnd: patch.downtimeEnd ?? current.downtimeEnd,
+        producedMassKg: patch.producedMassKg ?? current.producedMassKg,
+        downtimeReasonId: patch.downtimeReasonId ?? current.downtimeReasonId,
+        notes: Object.prototype.hasOwnProperty.call(patch, "notes") ? (patch.notes ?? undefined) : userNotes(current.notes)
+      });
+      const resolved = await this.resolveEntry(transaction, input, {
+        entryId: id,
+        lineId: current.lineId,
+        equipmentId: current.equipmentId,
+        shiftId: current.shiftId,
+        downtimeReasonId: current.downtimeReasonId
+      });
+      const entry = await this.updateWithVersion(transaction, id, patch.version, {
         weekId: input.weekId,
         date: input.date,
         sectorId: resolved.sector.id,
-        lineId: resolved.line?.id,
-        equipmentId: resolved.equipment?.id,
-        shiftId: resolved.shift?.id,
+        lineId: resolved.line?.id ?? null,
+        equipmentId: resolved.equipment?.id ?? null,
+        shiftId: resolved.shift?.id ?? null,
         productionStart: input.productionStart,
         productionEnd: input.productionEnd,
         downtimeStart: input.downtimeStart,
@@ -103,255 +205,204 @@ export class DowntimeService {
         stoppedPercent: resolved.calculated.stoppedPercent,
         realKgHour: resolved.calculated.realKgHour,
         possibleKgHour: resolved.calculated.possibleKgHour,
+        calculationRuleVersions: { ...resolved.calculated.calculationRuleVersions },
         status: resolved.calculated.status,
         workflowStatus: "DRAFT",
+        submittedAt: null,
+        submittedBy: null,
+        submissionReason: null,
+        approvedAt: null,
+        approvedBy: null,
+        approvalReason: null,
+        rejectedAt: null,
+        rejectedBy: null,
+        rejectionReason: null,
         downtimeReasonId: input.downtimeReasonId,
-        notes: notesWithCalculations(input.notes, resolved.calculated.inconsistencies),
-        createdBy: userId,
+        notes: notesWithCalculations(input.notes, resolved.calculated.inconsistencies) ?? null,
         updatedBy: userId
-      },
-      include: { sector: true, reason: true, week: true, line: true, equipment: true, shift: true }
+      });
+      await this.audit.record({
+        userId,
+        module: "downtime",
+        action: "update",
+        entity: "DowntimeEntry",
+        entityId: id,
+        before: current,
+        after: entry,
+        reason: patch.changeReason
+      }, transaction);
+      return { ...entry, calculations: resolved.calculated };
     });
-    await this.audit.record({
-      userId,
-      module: "downtime",
-      action: "create",
-      entity: "DowntimeEntry",
-      entityId: entry.id,
-      after: entry
-    });
-    return { ...entry, calculations: resolved.calculated };
-  }
-
-  async update(id: string, payload: unknown, user?: CurrentUser) {
-    const patch = downtimeEntryUpdateSchema.parse(payload);
-    const current = await this.prisma.downtimeEntry.findUnique({
-      where: { id },
-      include: { week: true, sector: true, line: true, equipment: true, shift: true, reason: true }
-    });
-    if (!current || current.deletedAt) throw new NotFoundException("Parada nao encontrada.");
-    if (current.week.deletedAt) throw new BadRequestException("Semana removida nao permite edicao.");
-    assertWeekWritable(current.week, "Semana fechada ou arquivada nao permite edicao de paradas.");
-    assertCurrentVersion(current.version, patch.version);
-    assertWorkflowState(current.workflowStatus, ["DRAFT", "REJECTED", "APPROVED"], "edicao");
-    assertCanAmendApproved(current.workflowStatus, user?.roles);
-    if (current.workflowStatus === "APPROVED" && !patch.changeReason) {
-      throw new BadRequestException("Alteracao de parada aprovada exige motivo.");
-    }
-
-    const input = downtimeEntrySchema.parse({
-      weekId: patch.weekId ?? current.weekId,
-      date: patch.date ?? current.date,
-      sector: patch.sector ?? current.sector.code,
-      lineId: Object.prototype.hasOwnProperty.call(patch, "lineId") ? (patch.lineId ?? undefined) : (current.lineId ?? undefined),
-      equipmentId: Object.prototype.hasOwnProperty.call(patch, "equipmentId") ? (patch.equipmentId ?? undefined) : (current.equipmentId ?? undefined),
-      shiftId: Object.prototype.hasOwnProperty.call(patch, "shiftId") ? (patch.shiftId ?? undefined) : (current.shiftId ?? undefined),
-      productionStart: patch.productionStart ?? current.productionStart,
-      productionEnd: patch.productionEnd ?? current.productionEnd,
-      downtimeStart: patch.downtimeStart ?? current.downtimeStart,
-      downtimeEnd: patch.downtimeEnd ?? current.downtimeEnd,
-      producedMassKg: patch.producedMassKg ?? current.producedMassKg,
-      downtimeReasonId: patch.downtimeReasonId ?? current.downtimeReasonId,
-      notes: Object.prototype.hasOwnProperty.call(patch, "notes") ? (patch.notes ?? undefined) : userNotes(current.notes)
-    });
-    const resolved = await this.resolveEntry(input, {
-      entryId: id,
-      lineId: current.lineId,
-      equipmentId: current.equipmentId,
-      shiftId: current.shiftId,
-      downtimeReasonId: current.downtimeReasonId
-    });
-    const userId = this.safeUserId(user);
-    const entry = await this.updateWithVersion(id, patch.version, {
-      weekId: input.weekId,
-      date: input.date,
-      sectorId: resolved.sector.id,
-      lineId: resolved.line?.id ?? null,
-      equipmentId: resolved.equipment?.id ?? null,
-      shiftId: resolved.shift?.id ?? null,
-      productionStart: input.productionStart,
-      productionEnd: input.productionEnd,
-      downtimeStart: input.downtimeStart,
-      downtimeEnd: input.downtimeEnd,
-      producedMassKg: input.producedMassKg,
-      stoppedMinutes: resolved.calculated.stoppedMinutes,
-      stoppedPercent: resolved.calculated.stoppedPercent,
-      realKgHour: resolved.calculated.realKgHour,
-      possibleKgHour: resolved.calculated.possibleKgHour,
-      status: resolved.calculated.status,
-      workflowStatus: "DRAFT",
-      submittedAt: null,
-      submittedBy: null,
-      submissionReason: null,
-      approvedAt: null,
-      approvedBy: null,
-      approvalReason: null,
-      rejectedAt: null,
-      rejectedBy: null,
-      rejectionReason: null,
-      downtimeReasonId: input.downtimeReasonId,
-      notes: notesWithCalculations(input.notes, resolved.calculated.inconsistencies) ?? null,
-      updatedBy: userId
-    });
-    await this.audit.record({
-      userId,
-      module: "downtime",
-      action: "update",
-      entity: "DowntimeEntry",
-      entityId: id,
-      before: current,
-      after: entry,
-      reason: patch.changeReason
-    });
-    return { ...entry, calculations: resolved.calculated };
   }
 
   async softDelete(id: string, payload: unknown, user?: CurrentUser) {
     const command = versionedReasonCommandSchema.parse(payload);
-    const current = await this.prisma.downtimeEntry.findUnique({
-      where: { id },
-      include: { week: true }
-    });
-    if (!current || current.deletedAt) throw new NotFoundException("Parada nao encontrada.");
-    if (current.week.deletedAt) throw new BadRequestException("Semana removida nao permite exclusao.");
-    assertWeekWritable(current.week, "Semana fechada ou arquivada nao permite exclusao de paradas.");
-    assertCurrentVersion(current.version, command.version);
-    assertWorkflowState(current.workflowStatus, ["DRAFT", "SUBMITTED", "UNDER_REVIEW", "APPROVED", "REJECTED"], "exclusao");
     const userId = this.requireActorId(user);
-    const entry = await this.updateWithVersion(id, command.version, {
-      deletedAt: new Date(),
-      workflowStatus: "CANCELLED",
-      updatedBy: userId
+    return this.writeTransaction(async (transaction) => {
+      await this.lockDowntimeEntry(transaction, id);
+      const current = await transaction.downtimeEntry.findUnique({
+        where: { id },
+        include: { week: true }
+      });
+      if (!current || current.deletedAt) throw new NotFoundException("Parada nao encontrada.");
+      if (current.week.deletedAt) throw new BadRequestException("Semana removida nao permite exclusao.");
+      assertWeekWritable(current.week, "Semana fechada ou arquivada nao permite exclusao de paradas.");
+      assertCurrentVersion(current.version, command.version);
+      assertWorkflowState(current.workflowStatus, ["DRAFT", "SUBMITTED", "UNDER_REVIEW", "APPROVED", "REJECTED"], "exclusao");
+      const entry = await this.updateWithVersion(transaction, id, command.version, {
+        deletedAt: new Date(),
+        workflowStatus: "CANCELLED",
+        updatedBy: userId
+      });
+      await this.audit.record({
+        userId,
+        module: "downtime",
+        action: "delete",
+        entity: "DowntimeEntry",
+        entityId: id,
+        before: current,
+        after: entry,
+        reason: command.reason
+      }, transaction);
+      return entry;
     });
-    await this.audit.record({
-      userId,
-      module: "downtime",
-      action: "delete",
-      entity: "DowntimeEntry",
-      entityId: id,
-      before: current,
-      after: entry,
-      reason: command.reason
-    });
-    return entry;
   }
 
   async restore(id: string, payload: unknown, user?: CurrentUser) {
     const command = versionedReasonCommandSchema.parse(payload);
-    const current = await this.prisma.downtimeEntry.findUnique({
-      where: { id },
-      include: { week: true }
-    });
-    if (!current || !current.deletedAt) throw new NotFoundException("Parada excluida nao encontrada.");
-    if (current.week.deletedAt) throw new BadRequestException("Semana removida nao permite restauracao.");
-    assertWeekWritable(current.week, "Semana fechada ou arquivada nao permite restauracao de paradas.");
-    this.assertDatesWithinWeek(
-      {
-        date: current.date,
+    const userId = this.requireActorId(user);
+    return this.writeTransaction(async (transaction) => {
+      await this.lockDowntimeEntry(transaction, id);
+      const current = await transaction.downtimeEntry.findUnique({
+        where: { id },
+        include: { week: true }
+      });
+      if (!current || !current.deletedAt) throw new NotFoundException("Parada excluida nao encontrada.");
+      if (current.week.deletedAt) throw new BadRequestException("Semana removida nao permite restauracao.");
+      assertWeekWritable(current.week, "Semana fechada ou arquivada nao permite restauracao de paradas.");
+      this.assertDatesWithinWeek(
+        {
+          date: current.date,
+          productionStart: current.productionStart,
+          productionEnd: current.productionEnd,
+          downtimeStart: current.downtimeStart,
+          downtimeEnd: current.downtimeEnd
+        },
+        current.week
+      );
+      this.assertChronology({
         productionStart: current.productionStart,
         productionEnd: current.productionEnd,
         downtimeStart: current.downtimeStart,
         downtimeEnd: current.downtimeEnd
-      },
-      current.week
-    );
-    this.assertChronology({
-      productionStart: current.productionStart,
-      productionEnd: current.productionEnd,
-      downtimeStart: current.downtimeStart,
-      downtimeEnd: current.downtimeEnd
+      });
+      if (!current.lineId && !current.equipmentId) {
+        throw new BadRequestException("Associe uma linha de producao ou equipamento antes de restaurar a parada legada.");
+      }
+      await this.assertNoOverlap(transaction, {
+        entryId: current.id,
+        equipmentId: current.equipmentId,
+        lineId: current.lineId,
+        downtimeStart: current.downtimeStart,
+        downtimeEnd: current.downtimeEnd
+      });
+      assertCurrentVersion(current.version, command.version);
+      const entry = await this.updateWithVersion(transaction, id, command.version, {
+        deletedAt: null,
+        workflowStatus: "DRAFT",
+        submittedAt: null,
+        submittedBy: null,
+        submissionReason: null,
+        approvedAt: null,
+        approvedBy: null,
+        approvalReason: null,
+        rejectedAt: null,
+        rejectedBy: null,
+        rejectionReason: null,
+        updatedBy: userId
+      });
+      await this.audit.record({
+        userId,
+        module: "downtime",
+        action: "restore",
+        entity: "DowntimeEntry",
+        entityId: id,
+        before: current,
+        after: entry,
+        reason: command.reason
+      }, transaction);
+      return entry;
     });
-    assertCurrentVersion(current.version, command.version);
-    const userId = this.requireActorId(user);
-    const entry = await this.updateWithVersion(id, command.version, {
-      deletedAt: null,
-      workflowStatus: "DRAFT",
-      submittedAt: null,
-      submittedBy: null,
-      submissionReason: null,
-      approvedAt: null,
-      approvedBy: null,
-      approvalReason: null,
-      rejectedAt: null,
-      rejectedBy: null,
-      rejectionReason: null,
-      updatedBy: userId
-    });
-    await this.audit.record({
-      userId,
-      module: "downtime",
-      action: "restore",
-      entity: "DowntimeEntry",
-      entityId: id,
-      before: current,
-      after: entry,
-      reason: command.reason
-    });
-    return entry;
   }
 
   async submit(id: string, payload: unknown, user?: CurrentUser) {
     const command = versionedOptionalReasonCommandSchema.parse(payload);
-    const current = await this.workflowRecord(id, "submissao");
-    assertCurrentVersion(current.version, command.version);
-    assertWorkflowState(current.workflowStatus, ["DRAFT", "REJECTED"], "submissao");
     const userId = this.requireActorId(user);
-    const entry = await this.updateWithVersion(id, command.version, {
-      workflowStatus: "SUBMITTED",
-      submittedAt: new Date(),
-      submittedBy: userId,
-      submissionReason: command.reason ?? null,
-      approvedAt: null,
-      approvedBy: null,
-      approvalReason: null,
-      rejectedAt: null,
-      rejectedBy: null,
-      rejectionReason: null,
-      updatedBy: userId
+    return this.writeTransaction(async (transaction) => {
+      const current = await this.workflowRecord(transaction, id, "submissao");
+      assertCurrentVersion(current.version, command.version);
+      assertWorkflowState(current.workflowStatus, ["DRAFT", "REJECTED"], "submissao");
+      const entry = await this.updateWithVersion(transaction, id, command.version, {
+        workflowStatus: "SUBMITTED",
+        submittedAt: new Date(),
+        submittedBy: userId,
+        submissionReason: command.reason ?? null,
+        approvedAt: null,
+        approvedBy: null,
+        approvalReason: null,
+        rejectedAt: null,
+        rejectedBy: null,
+        rejectionReason: null,
+        updatedBy: userId
+      });
+      await this.audit.record({ userId, module: "downtime", action: "submit", entity: "DowntimeEntry", entityId: id, before: current, after: entry, reason: command.reason }, transaction);
+      return entry;
     });
-    await this.audit.record({ userId, module: "downtime", action: "submit", entity: "DowntimeEntry", entityId: id, before: current, after: entry, reason: command.reason });
-    return entry;
   }
 
   async approve(id: string, payload: unknown, user?: CurrentUser) {
     const command = versionedOptionalReasonCommandSchema.parse(payload);
-    const current = await this.workflowRecord(id, "aprovacao");
-    assertCurrentVersion(current.version, command.version);
-    assertWorkflowState(current.workflowStatus, ["SUBMITTED", "UNDER_REVIEW"], "aprovacao");
     const userId = this.requireActorId(user);
-    assertIndependentApprover(current.submittedBy, userId);
-    const entry = await this.updateWithVersion(id, command.version, {
-      workflowStatus: "APPROVED",
-      approvedAt: new Date(),
-      approvedBy: userId,
-      approvalReason: command.reason ?? null,
-      rejectedAt: null,
-      rejectedBy: null,
-      rejectionReason: null,
-      updatedBy: userId
+    return this.writeTransaction(async (transaction) => {
+      const current = await this.workflowRecord(transaction, id, "aprovacao");
+      assertCurrentVersion(current.version, command.version);
+      assertWorkflowState(current.workflowStatus, ["SUBMITTED", "UNDER_REVIEW"], "aprovacao");
+      assertIndependentApprover(current.submittedBy, userId);
+      const entry = await this.updateWithVersion(transaction, id, command.version, {
+        workflowStatus: "APPROVED",
+        approvedAt: new Date(),
+        approvedBy: userId,
+        approvalReason: command.reason ?? null,
+        rejectedAt: null,
+        rejectedBy: null,
+        rejectionReason: null,
+        updatedBy: userId
+      });
+      await this.audit.record({ userId, module: "downtime", action: "approve", entity: "DowntimeEntry", entityId: id, before: current, after: entry, reason: command.reason }, transaction);
+      return entry;
     });
-    await this.audit.record({ userId, module: "downtime", action: "approve", entity: "DowntimeEntry", entityId: id, before: current, after: entry, reason: command.reason });
-    return entry;
   }
 
   async reject(id: string, payload: unknown, user?: CurrentUser) {
     const command = versionedReasonCommandSchema.parse(payload);
-    const current = await this.workflowRecord(id, "rejeicao");
-    assertCurrentVersion(current.version, command.version);
-    assertWorkflowState(current.workflowStatus, ["SUBMITTED", "UNDER_REVIEW"], "rejeicao");
     const userId = this.requireActorId(user);
-    const entry = await this.updateWithVersion(id, command.version, {
-      workflowStatus: "REJECTED",
-      rejectedAt: new Date(),
-      rejectedBy: userId,
-      rejectionReason: command.reason,
-      approvedAt: null,
-      approvedBy: null,
-      approvalReason: null,
-      updatedBy: userId
+    return this.writeTransaction(async (transaction) => {
+      const current = await this.workflowRecord(transaction, id, "rejeicao");
+      assertCurrentVersion(current.version, command.version);
+      assertWorkflowState(current.workflowStatus, ["SUBMITTED", "UNDER_REVIEW"], "rejeicao");
+      const entry = await this.updateWithVersion(transaction, id, command.version, {
+        workflowStatus: "REJECTED",
+        rejectedAt: new Date(),
+        rejectedBy: userId,
+        rejectionReason: command.reason,
+        approvedAt: null,
+        approvedBy: null,
+        approvalReason: null,
+        updatedBy: userId
+      });
+      await this.audit.record({ userId, module: "downtime", action: "reject", entity: "DowntimeEntry", entityId: id, before: current, after: entry, reason: command.reason }, transaction);
+      return entry;
     });
-    await this.audit.record({ userId, module: "downtime", action: "reject", entity: "DowntimeEntry", entityId: id, before: current, after: entry, reason: command.reason });
-    return entry;
   }
 
   async summary(weekId?: string) {
@@ -370,6 +421,7 @@ export class DowntimeService {
   }
 
   private async resolveEntry(
+    transaction: Prisma.TransactionClient,
     input: DowntimeEntryInput,
     existing?: {
       entryId?: string;
@@ -379,7 +431,10 @@ export class DowntimeService {
       downtimeReasonId: string;
     }
   ) {
-    const week = await this.prisma.weeklyPeriod.findUnique({
+    if (!input.lineId && !input.equipmentId) {
+      throw new BadRequestException("Informe a linha de producao ou o equipamento da parada.");
+    }
+    const week = await transaction.weeklyPeriod.findUnique({
       where: { id: input.weekId }
     });
     if (!week || week.deletedAt) throw new NotFoundException("Semana nao encontrada.");
@@ -387,15 +442,15 @@ export class DowntimeService {
     this.assertDatesWithinWeek(input, week);
     this.assertChronology(input);
 
-    const sector = await this.prisma.sector.findUnique({
+    const sector = await transaction.sector.findUnique({
       where: { code: input.sector }
     });
     if (!sector) throw new NotFoundException("Setor nao encontrado.");
     const [requestedLine, equipment, shift, reason] = await Promise.all([
-      input.lineId ? this.prisma.productionLine.findUnique({ where: { id: input.lineId } }) : Promise.resolve(null),
-      input.equipmentId ? this.prisma.equipment.findUnique({ where: { id: input.equipmentId }, include: { productionLine: true } }) : Promise.resolve(null),
-      input.shiftId ? this.prisma.shift.findUnique({ where: { id: input.shiftId } }) : Promise.resolve(null),
-      this.prisma.downtimeReason.findUnique({
+      input.lineId ? transaction.productionLine.findUnique({ where: { id: input.lineId } }) : Promise.resolve(null),
+      input.equipmentId ? transaction.equipment.findUnique({ where: { id: input.equipmentId }, include: { productionLine: true } }) : Promise.resolve(null),
+      input.shiftId ? transaction.shift.findUnique({ where: { id: input.shiftId } }) : Promise.resolve(null),
+      transaction.downtimeReason.findUnique({
         where: { id: input.downtimeReasonId }
       })
     ]);
@@ -423,21 +478,13 @@ export class DowntimeService {
     if (!reason.active && reason.id !== existing?.downtimeReasonId) {
       throw new BadRequestException("Motivo inativo nao pode ser usado na parada.");
     }
-    if (line) {
-      const conflict = await this.prisma.downtimeEntry.findFirst({
-        where: {
-          id: existing?.entryId ? { not: existing.entryId } : undefined,
-          deletedAt: null,
-          lineId: line.id,
-          downtimeStart: { lt: input.downtimeEnd },
-          downtimeEnd: { gt: input.downtimeStart }
-        },
-        select: { id: true }
-      });
-      if (conflict) {
-        throw new BadRequestException("Ja existe uma parada sobreposta para esta linha de producao.");
-      }
-    }
+    await this.assertNoOverlap(transaction, {
+      entryId: existing?.entryId,
+      equipmentId: equipment?.id ?? null,
+      lineId: line?.id ?? null,
+      downtimeStart: input.downtimeStart,
+      downtimeEnd: input.downtimeEnd
+    });
 
     const calculated = calculateDowntime({
       productionStart: input.productionStart,
@@ -471,24 +518,97 @@ export class DowntimeService {
     }
   }
 
-  private async workflowRecord(id: string, action: string) {
-    const current = await this.prisma.downtimeEntry.findUnique({ where: { id }, include: { week: true } });
+  private async assertNoOverlap(transaction: Prisma.TransactionClient, input: {
+    entryId?: string;
+    equipmentId: string | null;
+    lineId: string | null;
+    downtimeStart: Date;
+    downtimeEnd: Date;
+  }) {
+    if (!input.equipmentId && !input.lineId) return;
+    const resource: Prisma.DowntimeEntryWhereInput = input.equipmentId
+      ? { equipmentId: input.equipmentId }
+      : { equipmentId: null, lineId: input.lineId };
+    const conflict = await transaction.downtimeEntry.findFirst({
+      where: {
+        id: input.entryId ? { not: input.entryId } : undefined,
+        deletedAt: null,
+        ...resource,
+        downtimeStart: { lt: input.downtimeEnd },
+        downtimeEnd: { gt: input.downtimeStart }
+      },
+      select: { id: true }
+    });
+    if (conflict) {
+      const resourceName = input.equipmentId ? "equipamento" : "linha de producao sem equipamento";
+      throw new ConflictException(`Ja existe uma parada sobreposta para este ${resourceName}.`);
+    }
+  }
+
+  private async workflowRecord(transaction: Prisma.TransactionClient, id: string, action: string) {
+    await this.lockDowntimeEntry(transaction, id);
+    const current = await transaction.downtimeEntry.findUnique({ where: { id }, include: { week: true } });
     if (!current || current.deletedAt) throw new NotFoundException("Parada nao encontrada.");
     if (current.week.deletedAt) throw new BadRequestException(`Semana removida nao permite ${action}.`);
     assertWeekWritable(current.week, `Semana fechada ou arquivada nao permite ${action}.`);
+    if (!current.lineId && !current.equipmentId) {
+      throw new BadRequestException("Associe uma linha de producao ou equipamento antes de avançar o fluxo da parada.");
+    }
     this.assertDatesWithinWeek(current, current.week);
     this.assertChronology(current);
     return current;
   }
 
-  private async updateWithVersion(id: string, version: number, data: Prisma.DowntimeEntryUncheckedUpdateInput) {
+  private async updateWithVersion(
+    transaction: Prisma.TransactionClient,
+    id: string,
+    version: number,
+    data: Prisma.DowntimeEntryUncheckedUpdateInput
+  ) {
     try {
-      return await this.prisma.downtimeEntry.update({
+      return await transaction.downtimeEntry.update({
         where: { id, version },
         data: { ...data, version: { increment: 1 } },
         include: { sector: true, reason: true, week: true, line: true, equipment: true, shift: true }
       });
     } catch (error) {
+      this.throwIfOverlapConstraint(error);
+      throwOptimisticConflict(error);
+    }
+  }
+
+  private async lockDowntimeEntry(transaction: Prisma.TransactionClient, id: string) {
+    await transaction.$queryRaw(Prisma.sql`
+      SELECT "id"
+        FROM "downtime_entries"
+       WHERE "id" = CAST(${id} AS uuid)
+       FOR UPDATE
+    `);
+  }
+
+  private throwIfOverlapConstraint(error: unknown) {
+    const scope = downtimeOverlapConstraint(error);
+    if (!scope) return;
+    const resource = scope === "equipment"
+      ? "equipamento"
+      : scope === "line"
+        ? "linha de producao sem equipamento"
+        : "equipamento ou linha de producao";
+    throw new ConflictException(
+      `Conflito concorrente: outra parada sobreposta foi gravada para este ${resource}. Recarregue os dados e tente novamente.`
+    );
+  }
+
+  private async writeTransaction<T>(operation: (transaction: Prisma.TransactionClient) => Promise<T>) {
+    try {
+      return await this.prisma.$transaction(operation, {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable
+      });
+    } catch (error) {
+      this.throwIfOverlapConstraint(error);
+      if (error && typeof error === "object" && "code" in error && (error as { code?: unknown }).code === "P2034") {
+        throw new ConflictException("Conflito concorrente ao gravar a parada. Recarregue os dados e tente novamente.");
+      }
       throwOptimisticConflict(error);
     }
   }

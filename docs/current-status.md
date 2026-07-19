@@ -1,6 +1,6 @@
 # Estado atual do Nexus Operacional
 
-Atualizado em: 2026-07-18
+Atualizado em: 2026-07-19
 
 Este documento descreve a versao vigente da plataforma. O relatorio de lacunas de 2026-05-26 foi preservado apenas como historico em [`archive/implementation-gap-report-2026-05-26.md`](archive/implementation-gap-report-2026-05-26.md).
 
@@ -29,21 +29,33 @@ O Nexus Operacional possui uma base valida para homologacao controlada e uso par
 - Producao, perdas e paradas possuem rascunho, submissao, revisao, aprovacao/rejeicao, versao otimista e controles correspondentes no frontend; operador nao altera aprovado nem aprova o proprio envio.
 - Dashboard, relatorios, metas, produtividade, sobrepeso e snapshots consideram somente registros aprovados. Semanas nao fecham enquanto houver lancamentos pendentes.
 - Metas e alertas usam metricas canonicas, comparador e escopo de setor, sem limites visuais fixos ou direcao invertida.
-- Importacao autenticada com upload privado, hash SHA-256, inspecao estrutural do ZIP/XML, limites contra ZIP bomb, subprocesso Python isolado, lote auditavel e quarentena de inconsistencias.
-- Reconciliacao por lote compara contagens e totais diretos; apenas ADMIN pode certificar explicitamente um lote sem divergencias e sem erros pendentes.
-- Backup diario opcional, retencao, checksum, snapshot consistente em `REPEATABLE READ`, arquivos `0600` e ensaio nao destrutivo de leitura/tipos/contagens.
+- Metas possuem séries/versionamento imutável, vigência, unidade, escopo por setor/linha/equipamento/turno/produto, responsável, aprovação independente, retirada e bloqueio PostgreSQL de sobreposição. Legados permanecem `DRAFT`.
+- Preços possuem `DRAFT/APPROVED/RETIRED`, versão imutável, moeda, origem, responsável/aprovador independente e vigência. Produção/perdas usam somente preço aprovado vigente e gravam ID, versão, origem e moeda usados.
+- Regras de cálculo estão centralizadas e versionadas; versões executadas são persistidas nos lançamentos e snapshots. A regra P1 conflitante com o Excel permanece marcada para homologação humana.
+- Importacao autenticada com upload privado, hash SHA-256, inspecao estrutural do ZIP/XML, limites contra ZIP bomb, subprocesso Python isolado, staging editável, revisão humana e promoção serializável/atômica.
+- O parser v4 preserva linhas incompletas e 1.613 células com cache de erro ou referência quebrada; não inventa OP, nome, setor, fórmula, tolerância, estado ativo, peso derivado nem zero para valor ausente.
+- Perdas de embalagem preservam filme em kg e caixas em unidades, ambos separados por T1/T2. Ausente não vira zero e caixas nunca são somadas a quilogramas.
+- As 60 amostras órfãs de dosagem e 165 registros materializados do `ARQUIVO MORTO` são preservados com linhagem em quarentena não promovível.
+- Correção/revisão do staging usa versão otimista, auditoria antes/depois e a mesma transação da mutação. Promoção exige ator rastreável e não aceita preço da planilha como preço aprovado.
+- Reconciliacao por lote compara Excel, staging e PostgreSQL, incluindo dimensões T1/T2 e caixas, e inclui valores corrigidos/linhagem no hash. Apenas ADMIN pode certificar explicitamente lote elegível.
+- Concorrência de produção, fechamento/reabertura de semanas e paradas possui locks/restrições; cópias concorrentes recebem sufixos únicos e duplicata exige igualdade operacional exata.
+- Relatórios operacionais CSV/XLSX/PDF são gerados de registros aprovados no PostgreSQL, auditados e incluem dimensões de perdas sem misturar unidades.
+- Backup diário criptografado AES-256-GCM, retenção, checksum, cópia externa opcional, fallback e ensaio não destrutivo de leitura/tipos/contagens.
+- Inicialização de produção rejeita JWT/banco fracos, ausentes ou placeholders; Docker Compose não possui credencial operacional conhecida como fallback.
 - CI aplica migrations em PostgreSQL limpo, bloqueia vulnerabilidades altas/criticas e executa lint, typecheck, Vitest, Playwright desktop/mobile e builds.
 
 ## Limites atuais
 
 - Seletores de equipamento/turno ainda precisam ser incorporados a todos os formularios; produtividade ainda nao possui CRUD de lancamentos proprio.
-- A versao otimista protege concorrencia, mas o historico imutavel por revisao ainda depende dos logs de auditoria e nao de uma tabela temporal dedicada.
-- Metas precisam de vigencia, versao e escopo completos por setor, linha, produto, equipamento e turno.
-- A importacao ainda nao possui staging editavel/promocao transacional e nao cobre arquivo morto, produtividade, dosagem e todas as formulas da planilha.
-- Escrita operacional e gravacao da auditoria ainda nao estao na mesma transacao/outbox.
-- Relatorios profissionais em PDF/XLSX, restauracao real em banco separado e drill-down completo permanecem pendentes.
+- A fonte Excel ainda não fornece linhagem independente célula/fórmula para todos os produtos e lançamentos de produção; `sourceIntegrity.independentDerivedMetrics=false` bloqueia certificação do lote atual.
+- A fórmula P1 de rendimento esperado diverge do cálculo anterior do backend, e há rendimentos acima de 100%. Nenhuma decisão foi presumida; homologação operacional continua obrigatória.
+- Perdas da planilha não identificam setor nem produto. Esses campos precisam de correção humana e preço aprovado vigente antes de promoção.
+- Dosagem órfã e arquivo morto estão preservados, mas não alimentam tabelas oficiais até existir reconciliação histórica/contexto operacional suficiente.
+- Auditoria transacional foi fechada para upload/importação, produção, perdas, paradas, metas, preços, semanas e certificação; outros CRUDs operacionais ainda precisam da mesma garantia ou outbox em todas as mutações.
+- Produtividade e dosagem ainda não possuem workflow/versionamento completo equivalente a produção, perdas e paradas.
+- Restauração real em banco PostgreSQL separado e drill-down completo permanecem pendentes.
 - O ensaio de backup atual valida checksum, formato, tipos e contagens em tabelas temporarias; ele nao substitui um teste real de disaster recovery.
-- `npm audit` nao aponta vulnerabilidade alta/critica; restam duas moderadas no PostCSS fixado internamente pelo Next.js, documentadas sem aplicar downgrade forcado.
+- `npm audit` nao aponta vulnerabilidade alta/critica; restam quatro achados moderados nas cadeias transitivas Next/PostCSS e ExcelJS/UUID, documentados sem aplicar downgrades forcados incompatíveis.
 
 ## Regra de uso
 

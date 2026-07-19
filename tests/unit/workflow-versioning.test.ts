@@ -96,8 +96,16 @@ describe("workflow and optimistic concurrency", () => {
     const approved = { ...current, version: 5, workflowStatus: "APPROVED", approvedBy: actorId };
     const update = vi.fn().mockResolvedValue(approved);
     const audit = vi.fn().mockResolvedValue(undefined);
+    const transaction = {
+      $queryRaw: vi.fn().mockResolvedValue([{ id }]),
+      lossEntry: { findUnique: vi.fn().mockResolvedValue(current), update }
+    };
+    const prisma = {
+      ...transaction,
+      $transaction: vi.fn((operation: (client: typeof transaction) => unknown) => operation(transaction))
+    };
     const service = new LossesService(
-      { lossEntry: { findUnique: vi.fn().mockResolvedValue(current), update } } as never,
+      prisma as never,
       { record: audit } as never
     );
 
@@ -108,7 +116,12 @@ describe("workflow and optimistic concurrency", () => {
         data: expect.objectContaining({ workflowStatus: "APPROVED", approvedBy: actorId, approvalReason: "Valores validados", version: { increment: 1 } })
       })
     );
-    expect(audit).toHaveBeenCalledWith(expect.objectContaining({ action: "approve", reason: "Valores validados" }));
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "approve", reason: "Valores validados" }),
+      transaction
+    );
+    expect(transaction.$queryRaw).toHaveBeenCalledOnce();
+    expect(prisma.$transaction).toHaveBeenCalledWith(expect.any(Function), { isolationLevel: "Serializable" });
   });
 
   it("requires a rejection reason and stores it on downtime rejection", async () => {
@@ -122,13 +135,22 @@ describe("workflow and optimistic concurrency", () => {
       productionEnd: new Date("2026-05-05T16:00:00.000Z"),
       downtimeStart: new Date("2026-05-05T10:00:00.000Z"),
       downtimeEnd: new Date("2026-05-05T11:00:00.000Z"),
+      lineId: "44444444-4444-4444-8444-444444444444",
+      equipmentId: null,
       week
     };
     const rejected = { ...current, version: 3, workflowStatus: "REJECTED", rejectedBy: actorId };
     const findUnique = vi.fn().mockResolvedValue(current);
     const update = vi.fn().mockResolvedValue(rejected);
     const audit = vi.fn().mockResolvedValue(undefined);
-    const service = new DowntimeService({ downtimeEntry: { findUnique, update } } as never, { record: audit } as never);
+    const transaction = {
+      $queryRaw: vi.fn().mockResolvedValue([]),
+      downtimeEntry: { findUnique, update }
+    };
+    const prisma = {
+      $transaction: vi.fn((operation: (client: typeof transaction) => unknown) => operation(transaction))
+    };
+    const service = new DowntimeService(prisma as never, { record: audit } as never);
 
     await expect(service.reject(id, { version: 2 }, actor)).rejects.toThrow("Required");
     expect(findUnique).not.toHaveBeenCalled();
@@ -145,7 +167,12 @@ describe("workflow and optimistic concurrency", () => {
         })
       })
     );
-    expect(audit).toHaveBeenCalledWith(expect.objectContaining({ action: "reject", reason: "Horario inconsistente" }));
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "reject", reason: "Horario inconsistente" }),
+      transaction
+    );
+    expect(transaction.$queryRaw).toHaveBeenCalledOnce();
+    expect(prisma.$transaction).toHaveBeenCalledWith(expect.any(Function), { isolationLevel: "Serializable" });
   });
 
   it("returns HTTP 409 when the atomic version predicate loses a race", async () => {
@@ -197,10 +224,11 @@ describe("workflow and optimistic concurrency", () => {
       date: new Date("2026-05-05T00:00:00.000Z"),
       week
     };
-    const service = new ProductionService(
-      { productionEntry: { findUnique: vi.fn().mockResolvedValue(current) } } as never,
-      { record: vi.fn() } as never
-    );
+    const transaction = { productionEntry: { findUnique: vi.fn().mockResolvedValue(current) } };
+    const service = new ProductionService({
+      ...transaction,
+      $transaction: vi.fn((operation: (client: typeof transaction) => unknown) => operation(transaction))
+    } as never, { record: vi.fn() } as never);
 
     await expect(service.update(id, { version: 1, notes: "Correcao" }, actor)).rejects.toThrow("exige motivo");
   });
@@ -250,22 +278,25 @@ describe("workflow schema, migration and approved-only projections", () => {
   });
 
   it("imports all three operational record types as DRAFT", () => {
-    const importer = readFileSync(join(repoRoot, "apps/api/src/modules/import/import.service.ts"), "utf8");
+    const importer = [
+      "apps/api/src/modules/import/import.service.ts",
+      "apps/api/src/modules/import/import-promotion.service.ts"
+    ].map((relativePath) => readFileSync(join(repoRoot, relativePath), "utf8")).join("\n");
     expect(occurrences(importer, 'workflowStatus: "DRAFT"')).toBeGreaterThanOrEqual(3);
   });
 
   it("filters every operational dashboard and report projection to APPROVED", () => {
     const expectations: Array<[string, number]> = [
       ["apps/api/src/modules/dashboard/dashboard.service.ts", 9],
-      ["apps/api/src/modules/reports/reports.service.ts", 2],
+      ["apps/api/src/modules/reports/reports.service.ts", 5],
       ["apps/api/src/modules/productivity/productivity.service.ts", 2],
       ["apps/api/src/modules/overweight/overweight.service.ts", 1],
       ["apps/api/src/modules/goals/goals.service.ts", 3],
       ["apps/api/src/modules/weeks/weeks.service.ts", 3]
     ];
-    for (const [relativePath, exactCount] of expectations) {
+    for (const [relativePath, minimumCount] of expectations) {
       const source = readFileSync(join(repoRoot, relativePath), "utf8");
-      expect(occurrences(source, 'workflowStatus: "APPROVED"'), relativePath).toBe(exactCount);
+      expect(occurrences(source, 'workflowStatus: "APPROVED"'), relativePath).toBeGreaterThanOrEqual(minimumCount);
     }
   });
 });

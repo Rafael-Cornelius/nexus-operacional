@@ -1,5 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import { PrismaService } from "../../infrastructure/database/prisma.service";
+import { calculateOverweightRanking } from "../../domain/calculations/overweight-calculations";
 
 @Injectable()
 export class OverweightService {
@@ -22,23 +23,11 @@ export class OverweightService {
       code: products.find((product) => product.id === row.productId)?.code ?? row.productId,
       product: products.find((product) => product.id === row.productId)?.name ?? row.productId,
       sector: products.find((product) => product.id === row.productId)?.defaultSector.code ?? "-",
-      ...this.calculateOverweightStatus(
+      ...calculateOverweightRanking(
         Number(row._sum.overweightTotalKg ?? 0),
         Number(row._sum.producedKg ?? 0),
-        Number(products.find((product) => product.id === row.productId)?.weightConfig?.overweightTolerancePercent ?? 0.02)
+        Number(products.find((product) => product.id === row.productId)?.weightConfig?.overweightTolerancePercent ?? 0)
       )
     }));
-  }
-
-  private calculateOverweightStatus(overweightKg: number, producedKg: number, tolerancePercent: number) {
-    const overweightPercent = producedKg > 0 ? overweightKg / producedKg : 0;
-    const status = overweightPercent > tolerancePercent * 2 ? "CRITICAL" : overweightPercent > tolerancePercent ? "ATTENTION" : "OK";
-    return {
-      overweightKg,
-      producedKg,
-      overweightPercent,
-      tolerancePercent,
-      status
-    };
   }
 }
