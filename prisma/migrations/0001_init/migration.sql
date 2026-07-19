@@ -1,4 +1,4 @@
-﻿-- CreateSchema
+-- CreateSchema
 CREATE SCHEMA IF NOT EXISTS "public";
 
 -- CreateEnum
@@ -607,4 +607,3 @@ ALTER TABLE "audit_logs" ADD CONSTRAINT "audit_logs_user_id_fkey" FOREIGN KEY ("
 
 -- AddForeignKey
 ALTER TABLE "import_errors" ADD CONSTRAINT "import_errors_batch_id_fkey" FOREIGN KEY ("batch_id") REFERENCES "import_batches"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
