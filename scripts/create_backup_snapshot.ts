@@ -3,6 +3,7 @@ import { PrismaService } from "../apps/api/src/infrastructure/database/prisma.se
 import { RequestContextService } from "../apps/api/src/infrastructure/request-context/request-context.service";
 import { AuditService } from "../apps/api/src/modules/audit/audit.service";
 import { BackupsService } from "../apps/api/src/modules/backups/backups.service";
+import { formatBackupCliError } from "../apps/api/src/modules/backups/native-backup";
 
 async function main() {
   const prisma = new PrismaService();
@@ -21,7 +22,7 @@ async function main() {
 }
 
 main().catch((error: unknown) => {
-  const message = error instanceof Error ? error.message : "Falha desconhecida.";
+  const message = formatBackupCliError(error);
   process.stderr.write(`Criacao do backup para prova falhou: ${message}\n`);
   process.exitCode = 1;
 });

@@ -247,7 +247,10 @@ done
       } as never,
     );
 
-    await expect(service.create()).rejects.toThrow("Nao foi possivel gerar");
+    await expect(service.create()).rejects.toMatchObject({
+      message: "Nao foi possivel gerar o backup do banco.",
+      cause: expect.objectContaining({ message: "audit unavailable" }),
+    });
     expect(committedRows).toEqual([]);
     expect(attemptedRows).toEqual([
       expect.objectContaining({ status: "COMPLETED" }),

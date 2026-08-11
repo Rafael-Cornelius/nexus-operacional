@@ -20,6 +20,7 @@ import {
   NATIVE_MANIFEST_FORMAT,
   createEncryptedNativeBackup,
   decryptNativeBackup,
+  formatBackupCliError,
   parsePostgreSqlConnection,
   pgRestoreArguments,
   postgresProcessEnvironment,
@@ -155,6 +156,20 @@ describe("native PostgreSQL backup safety", () => {
     });
     expect(commandEnvironment).not.toHaveProperty("DATABASE_URL");
     expect(commandEnvironment).not.toHaveProperty("schema");
+  });
+
+  it("preserves nested backup diagnostics while redacting connection secrets", () => {
+    const error = new Error("Nao foi possivel gerar o backup do banco.", {
+      cause: new Error(
+        "pg_dump falhou em postgresql://nexus:private@db:5432/nexus password=private",
+      ),
+    });
+
+    const diagnostic = formatBackupCliError(error);
+    expect(diagnostic).toContain("Nao foi possivel gerar o backup do banco.");
+    expect(diagnostic).toContain("pg_dump falhou");
+    expect(diagnostic).not.toContain("nexus:private");
+    expect(diagnostic).not.toContain("password=private");
   });
 
   it.skipIf(process.platform === "win32")(
@@ -384,6 +399,9 @@ describe("native PostgreSQL backup safety", () => {
     expect(sql).toContain("pg_get_functiondef");
     expect(sql).toContain("attribute.attnotnull");
     expect(sql).toContain("attribute_default.adbin");
+    expect(sql).toContain("AS column_collation");
+    expect(sql).toContain("AS type_collation");
+    expect(sql).not.toMatch(/\bAS\s+collation\b/i);
   });
 
   it("rejects ciphertext tampering before exposing a pg_dump file", async () => {

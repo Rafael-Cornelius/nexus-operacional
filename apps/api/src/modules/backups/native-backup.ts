@@ -33,6 +33,35 @@ const customDumpMagic = Buffer.from("PGDMP", "ascii");
 const authTagBytes = 16;
 const maxHeaderBytes = 64 * 1024;
 const maxManifestBytes = 16 * 1024 * 1024;
+const maxCliErrorBytes = 4 * 1024;
+
+function redactBackupDiagnostic(value: string) {
+  return value
+    .replace(/\b(postgres(?:ql)?:\/\/)[^\s"'`]+/gi, "$1[REDACTED]")
+    .replace(
+      /\b(password|passwd|secret|token|key)(\s*[=:]\s*)[^\s,;]+/gi,
+      "$1$2[REDACTED]",
+    )
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function formatBackupCliError(error: unknown) {
+  const messages: string[] = [];
+  const visited = new Set<object>();
+  let current: unknown = error;
+
+  while (current instanceof Error && messages.length < 6) {
+    if (visited.has(current)) break;
+    visited.add(current);
+    const message = redactBackupDiagnostic(current.message);
+    if (message && !messages.includes(message)) messages.push(message);
+    current = current.cause;
+  }
+
+  return (messages.length ? messages.join(" | causa: ") : "Falha desconhecida.")
+    .slice(0, maxCliErrorBytes);
+}
 
 export interface NativeTableProof {
   rows: string;

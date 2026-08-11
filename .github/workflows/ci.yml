@@ -102,6 +102,8 @@ jobs:
           RESTORE_DATABASE_EXPECTED_NAME: nexus_restore_proof
           RESTORE_CONFIRMATION: RESTORE_TO_EMPTY_DATABASE:nexus_restore_proof
         run: |
+          pg_dump --version | grep -E '^pg_dump \(PostgreSQL\) 16\.'
+          pg_restore --version | grep -E '^pg_restore \(PostgreSQL\) 16\.'
           PGPASSWORD=nexus psql -h localhost -U nexus -d postgres -v ON_ERROR_STOP=1 -c 'CREATE DATABASE nexus_restore_proof'
           backup_json="$(npm run --silent backup:create:snapshot)"
           backup_path="$(jq -er '.filePath' <<<"$backup_json")"

@@ -281,7 +281,7 @@ const structuralQueries = [
             'generated', attribute.attgenerated,
             'collation', CASE
               WHEN attribute.attcollation = 0 THEN NULL
-              ELSE jsonb_build_array(collation_namespace.nspname, collation.collname)
+              ELSE jsonb_build_array(column_collation_namespace.nspname, column_collation.collname)
             END,
             'compression', attribute.attcompression,
             'storage', attribute.attstorage
@@ -292,8 +292,9 @@ const structuralQueries = [
      LEFT JOIN pg_catalog.pg_attrdef AS attribute_default
        ON attribute_default.adrelid = attribute.attrelid
       AND attribute_default.adnum = attribute.attnum
-     LEFT JOIN pg_catalog.pg_collation AS collation ON collation.oid = attribute.attcollation
-     LEFT JOIN pg_catalog.pg_namespace AS collation_namespace ON collation_namespace.oid = collation.collnamespace
+     LEFT JOIN pg_catalog.pg_collation AS column_collation ON column_collation.oid = attribute.attcollation
+     LEFT JOIN pg_catalog.pg_namespace AS column_collation_namespace
+       ON column_collation_namespace.oid = column_collation.collnamespace
     WHERE relation.relkind IN ('r', 'p', 'f', 'v', 'm')
       AND attribute.attnum > 0
       AND NOT attribute.attisdropped
@@ -430,7 +431,7 @@ const structuralQueries = [
             END,
             'collation', CASE
               WHEN type_row.typcollation = 0 THEN NULL
-              ELSE jsonb_build_array(collation_namespace.nspname, collation.collname)
+              ELSE jsonb_build_array(type_collation_namespace.nspname, type_collation.collname)
             END,
             'inputFunction', NULLIF(type_row.typinput::oid, 0::oid)::regprocedure::text,
             'outputFunction', NULLIF(type_row.typoutput::oid, 0::oid)::regprocedure::text,
@@ -482,8 +483,9 @@ const structuralQueries = [
      FROM pg_catalog.pg_type AS type_row
      JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = type_row.typnamespace
      LEFT JOIN pg_catalog.pg_class AS composite_relation ON composite_relation.oid = type_row.typrelid
-     LEFT JOIN pg_catalog.pg_collation AS collation ON collation.oid = type_row.typcollation
-     LEFT JOIN pg_catalog.pg_namespace AS collation_namespace ON collation_namespace.oid = collation.collnamespace
+     LEFT JOIN pg_catalog.pg_collation AS type_collation ON type_collation.oid = type_row.typcollation
+     LEFT JOIN pg_catalog.pg_namespace AS type_collation_namespace
+       ON type_collation_namespace.oid = type_collation.collnamespace
      LEFT JOIN pg_catalog.pg_range AS range_row
        ON range_row.rngtypid = type_row.oid OR range_row.rngmultitypid = type_row.oid
      LEFT JOIN pg_catalog.pg_opclass AS sub_opclass ON sub_opclass.oid = range_row.rngsubopc

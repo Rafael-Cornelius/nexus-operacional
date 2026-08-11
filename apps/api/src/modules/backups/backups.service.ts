@@ -278,6 +278,7 @@ export class BackupsService {
       await this.recordFailedBackup(filePath, createdBy, user, failure);
       throw new InternalServerErrorException(
         "Nao foi possivel gerar o backup do banco.",
+        { cause: failure },
       );
     } finally {
       if (temporaryDirectory) {
