@@ -78,6 +78,11 @@ interface PricePeriod extends ApprovedRecord {
   recordVersion: number;
 }
 
+interface GoalRecord extends Entity {
+  workflowStatus: string;
+  approvedBy: string | null;
+}
+
 interface SnapshotResponse extends Entity {
   snapshotData: null | {
     format: string;
@@ -366,7 +371,7 @@ test("executa fluxo mestre diario real com segregacao de aprovacao e rastreabili
     expect(approvedPrice.status).toBe("APPROVED");
     expect(approvedPrice.approvedBy).toBe(approver.id);
 
-    const goalDraft = await jsonResponse<ApprovedRecord>(
+    const goalDraft = await jsonResponse<GoalRecord>(
       await adminApi.post("/api/goals", {
         data: {
           name: `Meta de producao E2E ${runToken}`,
@@ -389,14 +394,15 @@ test("executa fluxo mestre diario real com segregacao de aprovacao e rastreabili
       201,
       "criacao da meta em rascunho"
     );
-    const approvedGoal = await jsonResponse<ApprovedRecord>(
+    expect(goalDraft.workflowStatus).toBe("DRAFT");
+    const approvedGoal = await jsonResponse<GoalRecord>(
       await approverApi.post(`/api/goals/${goalDraft.id}/approve`, {
         data: { reason: "Meta conferida pelo aprovador independente no E2E" }
       }),
       201,
       "aprovacao da meta"
     );
-    expect(approvedGoal.status).toBe("APPROVED");
+    expect(approvedGoal.workflowStatus).toBe("APPROVED");
     expect(approvedGoal.approvedBy).toBe(approver.id);
 
     const calculationRules = await jsonResponse<CalculationRule[]>(
