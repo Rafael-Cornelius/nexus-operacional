@@ -33,6 +33,7 @@ for (const route of reviewRoutes) {
   test(`review screenshot ${route.slug}`, async ({ page }, testInfo) => {
     await page.goto("/login", { timeout: 90_000 });
     await page.getByRole("button", { name: "Entrar" }).click();
+    await expect(page).toHaveURL(/\/dashboard\/?$/, { timeout: 15_000 });
     await expect(page.getByRole("heading", { name: "Dashboard geral" })).toBeVisible();
     await page.goto(route.path, { timeout: 90_000 });
     await expect(page.locator("main").getByRole("heading").first()).toBeVisible();

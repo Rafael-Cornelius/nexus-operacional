@@ -42,6 +42,12 @@ export function isApiConflict(error: unknown): error is ApiClientError {
   return error instanceof ApiClientError && error.status === 409;
 }
 
+function assertOperationalApiEnabled() {
+  if (DEMO_MODE) {
+    throw new ApiClientError("A API operacional é bloqueada no preview demonstrativo.", 503);
+  }
+}
+
 async function parseError(response: Response, fallback: string) {
   const body = await response.json().catch(() => null);
   if (typeof body?.message === "string") return body.message;
@@ -51,6 +57,7 @@ async function parseError(response: Response, fallback: string) {
 }
 
 export async function apiGet<T>(path: string, fallback: T): Promise<T> {
+  if (DEMO_MODE) return fallback;
   try {
     const response = await fetch(`${API_URL}${path}`, {
       credentials: "include"
@@ -63,6 +70,7 @@ export async function apiGet<T>(path: string, fallback: T): Promise<T> {
 }
 
 export async function apiPost<T>(path: string, payload: unknown, fallback: T): Promise<T> {
+  if (DEMO_MODE) return fallback;
   try {
     const response = await fetch(`${API_URL}${path}`, {
       method: "POST",
@@ -78,6 +86,7 @@ export async function apiPost<T>(path: string, payload: unknown, fallback: T): P
 }
 
 export async function apiPostClient<T>(path: string, payload: unknown): Promise<T> {
+  assertOperationalApiEnabled();
   const response = await fetch(`${API_URL}${path}`, {
     method: "POST",
     credentials: "include",
@@ -94,6 +103,7 @@ export async function apiPostClient<T>(path: string, payload: unknown): Promise<
 }
 
 export async function apiUploadClient<T>(path: string, formData: FormData): Promise<T> {
+  assertOperationalApiEnabled();
   const response = await fetch(`${API_URL}${path}`, {
     method: "POST",
     credentials: "include",
@@ -109,6 +119,7 @@ export async function apiUploadClient<T>(path: string, formData: FormData): Prom
 }
 
 export async function apiGetClient<T>(path: string): Promise<T> {
+  assertOperationalApiEnabled();
   const response = await fetch(`${API_URL}${path}`, {
     credentials: "include"
   });
@@ -122,6 +133,7 @@ export async function apiGetClient<T>(path: string): Promise<T> {
 }
 
 export async function apiPatchClient<T>(path: string, payload: unknown): Promise<T> {
+  assertOperationalApiEnabled();
   const response = await fetch(`${API_URL}${path}`, {
     method: "PATCH",
     credentials: "include",
@@ -138,6 +150,7 @@ export async function apiPatchClient<T>(path: string, payload: unknown): Promise
 }
 
 export async function apiDeleteClient<T>(path: string): Promise<T> {
+  assertOperationalApiEnabled();
   const response = await fetch(`${API_URL}${path}`, {
     method: "DELETE",
     credentials: "include"

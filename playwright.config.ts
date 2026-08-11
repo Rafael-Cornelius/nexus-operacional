@@ -6,6 +6,9 @@ const baseURL = `http://127.0.0.1:${port}`;
 export default defineConfig({
   testDir: "./tests/e2e",
   timeout: 30_000,
+  expect: {
+    timeout: 15_000
+  },
   workers: 1,
   use: {
     baseURL,
@@ -17,7 +20,7 @@ export default defineConfig({
   ],
   webServer: {
     command: `npm run dev --workspace=@nexus/web -- --port ${port}`,
-    url: `${baseURL}/login`,
+    url: `${baseURL}/dashboard`,
     reuseExistingServer: true,
     timeout: 120_000
   }

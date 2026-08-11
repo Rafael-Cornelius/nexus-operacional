@@ -3,6 +3,7 @@ import { expect, test, type Page } from "@playwright/test";
 async function login(page: Page) {
   await page.goto("/login");
   await page.getByRole("button", { name: "Entrar" }).click();
+  await expect(page).toHaveURL(/\/dashboard\/?$/, { timeout: 15_000 });
   await expect(page.getByRole("heading", { name: "Dashboard geral" })).toBeVisible();
 }
 

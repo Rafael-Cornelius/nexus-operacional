@@ -35,4 +35,19 @@ describe("preview login flow", () => {
     api.clearSession();
     expect(api.getSession()).toBeNull();
   });
+
+  it("keeps the public preview isolated from the operational API", async () => {
+    vi.stubEnv("NEXT_PUBLIC_DEMO_MODE", "true");
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const api = await import("../../apps/web/services/api");
+    const fallback = { source: "preview" };
+
+    await expect(api.apiGet("/dashboard/kpis", fallback)).resolves.toBe(fallback);
+    await expect(api.apiPost("/production", {}, fallback)).resolves.toBe(fallback);
+    await expect(api.apiGetClient("/weeks")).rejects.toMatchObject({ status: 503 });
+    await expect(api.apiPostClient("/auth/login", {})).rejects.toMatchObject({ status: 503 });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
 });

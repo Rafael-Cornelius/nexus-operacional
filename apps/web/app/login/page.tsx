@@ -2,7 +2,7 @@
 
 import { Factory } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { FormEvent, Suspense, useState } from "react";
+import { FormEvent, Suspense, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { isValidDemoAdminCredentials } from "@/lib/demo-auth";
@@ -21,8 +21,11 @@ function LoginForm() {
   const searchParams = useSearchParams();
   const [email, setEmail] = useState(DEMO_MODE ? DEMO_ADMIN_EMAIL : "");
   const [password, setPassword] = useState(DEMO_MODE ? DEMO_ADMIN_PASSWORD : "");
+  const [hydrated, setHydrated] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => setHydrated(true), []);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -86,7 +89,7 @@ function LoginForm() {
             </>
           )}
           {error ? <p className="rounded-md border border-rose-300/30 bg-rose-300/10 px-3 py-2 text-sm text-rose-100">{error}</p> : null}
-          <Button className="w-full" type="submit" disabled={loading}>
+          <Button className="w-full" type="submit" disabled={!hydrated || loading}>
             {loading ? "Validando..." : "Entrar"}
           </Button>
         </form>
