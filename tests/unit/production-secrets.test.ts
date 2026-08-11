@@ -180,4 +180,13 @@ describe("production secret deployment wiring", () => {
     expect(dockerIgnore).toContain("**/.env*");
     expect(dockerIgnore).toContain("!.env.example");
   });
+
+  it("preserves workspace-local build tools in the API builder stage", () => {
+    expect(dockerfile).toContain(
+      "COPY --from=deps /app/apps/api/node_modules ./apps/api/node_modules",
+    );
+    expect(dockerfile.indexOf("/app/apps/api/node_modules")).toBeLessThan(
+      dockerfile.indexOf("npm run build --workspace=@nexus/api"),
+    );
+  });
 });
