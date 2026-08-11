@@ -286,9 +286,10 @@ export async function inspectCompletelyEmptyRestoreTarget(
            FROM pg_catalog.pg_largeobject_metadata AS large_object
          UNION ALL
          SELECT 'collation'::text,
-                namespace.nspname || '.' || collation.collname
-           FROM pg_catalog.pg_collation AS collation
-           JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = collation.collnamespace
+                namespace.nspname || '.' || catalog_collation.collname
+           FROM pg_catalog.pg_collation AS catalog_collation
+           JOIN pg_catalog.pg_namespace AS namespace
+             ON namespace.oid = catalog_collation.collnamespace
           WHERE namespace.nspname <> 'information_schema'
             AND namespace.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
          UNION ALL

@@ -481,6 +481,8 @@ describe("native PostgreSQL backup safety", () => {
     ]) {
       expect(inspection).toContain(catalog);
     }
+    expect(inspection).toContain("AS catalog_collation");
+    expect(inspection).not.toMatch(/\bAS\s+collation\b/i);
   });
 
   it("uses pg_restore atomic and fail-fast flags without source URL", () => {
