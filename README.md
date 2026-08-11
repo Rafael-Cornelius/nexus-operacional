@@ -65,6 +65,9 @@ Edit `.env` and set:
 - `WEB_ORIGIN` to your public frontend URL
 - `NEXT_PUBLIC_API_URL` to `/api`, keeping browser requests on the same origin
 
+`NEXT_PUBLIC_API_URL` and `API_INTERNAL_URL` are embedded while building the
+web image. Rebuild `web` after changing either value.
+
 Docker Compose constructs the API `DATABASE_URL` from `POSTGRES_USER`, `POSTGRES_PASSWORD` and `POSTGRES_DB`. A direct API deployment outside Compose must set `DATABASE_URL` explicitly with a strong database password.
 
 Compose stops before creating containers when a required secret, `WEB_ORIGIN` or the external backup path is empty. The API also refuses to start with `NODE_ENV=production` when the JWT secret, database password, Web origin or backup key is missing, malformed, insecure or resembles a known placeholder. Production cookies accept only `SameSite=Lax/Strict`, and unsafe browser requests must come from the configured same origin. Development keeps its isolated fallback only when `NODE_ENV` is not `production`.

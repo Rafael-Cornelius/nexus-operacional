@@ -56,10 +56,8 @@ Use, respectivamente, as saidas em `POSTGRES_PASSWORD`, `JWT_ACCESS_SECRET` e `B
 - `INITIAL_ADMIN_EMAIL`
 - `INITIAL_ADMIN_PASSWORD` (minimo 12 caracteres, maiuscula, minuscula, numero e simbolo; exclusiva deste ambiente)
 - `WEB_ORIGIN`
-- `BACKUP_DIR`
 - `BACKUP_ENCRYPTION_KEY` (32 bytes em base64 ou 64 caracteres hexadecimais)
 - `BACKUP_EXTERNAL_HOST_DIR` apontando para um bind mount protegido em disco/NAS distinto
-- `IMPORT_UPLOAD_DIR`
 - `.env.restore` separado, modo `0600`, com `RESTORE_DATABASE_URL` apontando somente para o banco descartavel `nexus_restore_proof`
 
 O Compose monta `DATABASE_URL` internamente com `POSTGRES_USER`, `POSTGRES_PASSWORD` e `POSTGRES_DB`. Em deploy direto da API, fora do Compose, defina uma `DATABASE_URL` PostgreSQL completa e codifique caracteres especiais da senha para URL. Credenciais publicas do preview sao recusadas pela politica do bootstrap.
@@ -198,7 +196,18 @@ controlado do provedor.
 - Health API publico minimo: `http://localhost:3000/api/health`
 - Health Web: `http://localhost:3000/login`
 
+`API_HOST_PORT` altera somente a porta loopback publicada no host (3333 por
+padrao). A API dentro do Compose permanece em 3333, portanto healthcheck e
+`API_INTERNAL_URL=http://api:3333` continuam coerentes.
+
 O frontend operacional usa `/api` por padrao. No Docker Compose, o servidor standalone do Next.js reescreve esse caminho para `API_INTERNAL_URL` (por padrao, `http://api:3333`), preservando cookies HTTP-only de mesma origem. Assim o navegador de outro computador da rede nao tenta chamar `localhost:3333`.
+
+`API_INTERNAL_URL` e `NEXT_PUBLIC_API_URL` sao argumentos de build do frontend,
+nao configuracoes dinamicas da imagem pronta. Depois de alterar qualquer uma,
+execute `docker compose build web` antes de recriar o servico. O Compose fixa
+`BACKUP_DIR=/app/backups` e `IMPORT_UPLOAD_DIR=/app/uploads/imports` para que os
+arquivos sempre caiam nos volumes persistentes; os valores homonimos de
+`.env.example` servem apenas para execucao direta fora do Compose.
 
 PostgreSQL e porta direta da API ficam vinculados a `127.0.0.1`; nao sao publicados na rede. Em producao, exponha somente Web por proxy reverso com HTTPS e certificado valido. Nao publique as portas `5432` ou `3333` no roteador, firewall ou provedor.
 

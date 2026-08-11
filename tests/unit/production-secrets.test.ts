@@ -189,4 +189,24 @@ describe("production secret deployment wiring", () => {
       dockerfile.indexOf("npm run build --workspace=@nexus/api"),
     );
   });
+
+  it("keeps the API container port fixed while allowing a loopback host port", () => {
+    expect(compose).toContain('API_PORT: "3333"');
+    expect(compose).toContain(
+      '"127.0.0.1:${API_HOST_PORT:-3333}:3333"',
+    );
+    expect(compose).not.toContain('"127.0.0.1:${API_PORT:-3333}:3333"');
+  });
+
+  it("binds mutable files to fixed persistent paths in the API container", () => {
+    expect(compose).toContain("BACKUP_DIR: /app/backups");
+    expect(compose).toContain("IMPORT_UPLOAD_DIR: /app/uploads/imports");
+    expect(compose).not.toContain("BACKUP_DIR: ${BACKUP_DIR");
+    expect(compose).not.toContain("IMPORT_UPLOAD_DIR: ${IMPORT_UPLOAD_DIR");
+  });
+
+  it("treats frontend routing values as build-time arguments only", () => {
+    expect(compose.match(/^\s+API_INTERNAL_URL:/gm)).toHaveLength(1);
+    expect(compose.match(/^\s+NEXT_PUBLIC_API_URL:/gm)).toHaveLength(1);
+  });
 });
