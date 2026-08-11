@@ -4,7 +4,10 @@ import {
   BarChart3,
   Boxes,
   CalendarDays,
+  Clock3,
   ClipboardList,
+  Component,
+  Scale,
   Database,
   FileSpreadsheet,
   Gauge,
@@ -15,7 +18,8 @@ import {
   ShieldCheck,
   Target,
   TimerReset,
-  Users
+  Users,
+  Wrench
 } from "lucide-react";
 
 export type NavigationRole = "ADMIN" | "MANAGER" | "SUPERVISOR" | "OPERATOR" | "VIEWER";
@@ -26,10 +30,14 @@ export const navigation = [
   { href: "/producao/p1", label: "Producao P1", icon: Activity, roles: ["ADMIN", "SUPERVISOR", "OPERATOR"] },
   { href: "/producao/p2", label: "Producao P2", icon: Gauge, roles: ["ADMIN", "SUPERVISOR", "OPERATOR"] },
   { href: "/perdas", label: "Controle de perdas", icon: ClipboardList, roles: ["ADMIN", "MANAGER", "SUPERVISOR", "OPERATOR"] },
+  { href: "/dosagem", label: "Controle de dosagem", icon: Scale, roles: ["ADMIN", "MANAGER", "SUPERVISOR", "OPERATOR", "VIEWER"] },
   { href: "/sobrepeso", label: "Sobrepeso", icon: Target, roles: ["ADMIN", "MANAGER", "SUPERVISOR", "VIEWER"] },
   { href: "/paradas", label: "Paradas", icon: TimerReset, roles: ["ADMIN", "MANAGER", "SUPERVISOR", "OPERATOR"] },
-  { href: "/produtividade", label: "Produtividade", icon: Gauge, roles: ["ADMIN", "MANAGER", "SUPERVISOR", "VIEWER"] },
+  { href: "/produtividade", label: "Produtividade", icon: Gauge, roles: ["ADMIN", "MANAGER", "SUPERVISOR", "OPERATOR", "VIEWER"] },
   { href: "/produtos", label: "Produtos", icon: Database, roles: ["ADMIN", "MANAGER", "SUPERVISOR", "OPERATOR", "VIEWER"] },
+  { href: "/cadastros-base", label: "Cadastros-base", icon: Component, roles: ["ADMIN"] },
+  { href: "/equipamentos", label: "Equipamentos", icon: Wrench, roles: ["ADMIN", "MANAGER", "SUPERVISOR", "OPERATOR", "VIEWER"] },
+  { href: "/turnos", label: "Turnos", icon: Clock3, roles: ["ADMIN", "MANAGER", "SUPERVISOR", "OPERATOR", "VIEWER"] },
   { href: "/semanas", label: "Semanas", icon: CalendarDays, roles: ["ADMIN", "MANAGER", "SUPERVISOR", "OPERATOR", "VIEWER"] },
   { href: "/historico", label: "Historico", icon: History, roles: ["ADMIN", "MANAGER", "SUPERVISOR", "VIEWER"] },
   { href: "/relatorios", label: "Relatorios", icon: FileSpreadsheet, roles: ["ADMIN", "MANAGER", "SUPERVISOR", "VIEWER"] },

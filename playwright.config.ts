@@ -1,11 +1,17 @@
 import { defineConfig, devices } from "@playwright/test";
 
+const port = Number(process.env.PLAYWRIGHT_PORT ?? "3000");
+const baseURL = `http://127.0.0.1:${port}`;
+
 export default defineConfig({
   testDir: "./tests/e2e",
   timeout: 30_000,
+  expect: {
+    timeout: 15_000
+  },
   workers: 1,
   use: {
-    baseURL: "http://localhost:3000",
+    baseURL,
     trace: "on-first-retry"
   },
   projects: [
@@ -13,8 +19,8 @@ export default defineConfig({
     { name: "mobile", use: { ...devices["Pixel 7"] } }
   ],
   webServer: {
-    command: "npm.cmd run dev --workspace=@nexus/web",
-    url: "http://localhost:3000/nexus-operacional/",
+    command: `npm run dev --workspace=@nexus/web -- --port ${port}`,
+    url: `${baseURL}/dashboard`,
     reuseExistingServer: true,
     timeout: 120_000
   }

@@ -7,6 +7,8 @@ import { DataTable } from "@/components/tables/data-table";
 import { Button } from "@/components/ui/button";
 import { Card, StatCard } from "@/components/ui/card";
 import { formatKg, formatPercent } from "@/lib/format";
+import { goalVisualState, type OperationalGoalAlert, uniqueOperationalGoal } from "@/lib/operational-goals";
+import { resolveExplicitWeekId } from "@/lib/week-selection";
 import { apiGetClient, getSession } from "@/services/api";
 
 interface WeekRow {
@@ -31,25 +33,37 @@ export default function OverweightPage() {
   const [weeks, setWeeks] = useState<WeekRow[]>([]);
   const [weekId, setWeekId] = useState("");
   const [ranking, setRanking] = useState<OverweightRow[]>([]);
+  const [alerts, setAlerts] = useState<OperationalGoalAlert[]>([]);
   const [message, setMessage] = useState("Carregando ranking de sobrepeso da API.");
   const [loading, setLoading] = useState(false);
-  const token = useMemo(() => getSession()?.accessToken, []);
+  const session = useMemo(() => getSession(), []);
 
   async function loadRanking(nextWeekId = weekId) {
-    if (!token) return;
+    if (!session) return;
     setLoading(true);
     try {
-      const weekRows = await apiGetClient<WeekRow[]>("/weeks", token);
-      const selectedWeek = nextWeekId || weekRows.find((week) => week.status !== "CLOSED" && week.status !== "ARCHIVED")?.id || weekRows[0]?.id || "";
+      const weekRows = await apiGetClient<WeekRow[]>("/weeks");
+      const selectedWeek = resolveExplicitWeekId(weekRows, nextWeekId);
       setWeeks(weekRows);
       setWeekId(selectedWeek);
-      const query = selectedWeek ? `?weekId=${selectedWeek}` : "";
-      const data = await apiGetClient<OverweightRow[]>(`/overweight/ranking${query}`, token);
+      if (!selectedWeek) {
+        setRanking([]);
+        setAlerts([]);
+        setMessage(weekRows.length ? "Selecione uma semana para carregar o ranking de sobrepeso." : "Nenhuma semana operacional cadastrada.");
+        return;
+      }
+      const query = `?weekId=${encodeURIComponent(selectedWeek)}`;
+      const [data, nextAlerts] = await Promise.all([
+        apiGetClient<OverweightRow[]>(`/overweight/ranking${query}`),
+        apiGetClient<OperationalGoalAlert[]>(`/dashboard/alerts${query}`)
+      ]);
       setRanking(data);
+      setAlerts(nextAlerts);
       setMessage(data.length ? "Ranking de sobrepeso carregado da API." : "Sem producao na semana selecionada.");
     } catch (error) {
       setWeeks([]);
       setRanking([]);
+      setAlerts([]);
       setMessage(error instanceof Error ? error.message : "Nao foi possivel carregar ranking da API.");
     } finally {
       setLoading(false);
@@ -64,6 +78,9 @@ export default function OverweightPage() {
   const totalProduced = ranking.reduce((sum, row) => sum + row.producedKg, 0);
   const totalPercent = totalProduced > 0 ? totalOverweight / totalProduced : 0;
   const criticalRows = ranking.filter((row) => row.status !== "OK").length;
+  const overweightGoal = goalVisualState(alerts, ["overweight"], formatPercent);
+  const uniqueOverweightGoal = uniqueOperationalGoal(alerts, ["overweight"]);
+  const displayedPercent = uniqueOverweightGoal?.value ?? totalPercent;
 
   return (
     <div className="space-y-6">
@@ -71,7 +88,7 @@ export default function OverweightPage() {
 
       <Card>
         <div className="flex flex-wrap items-end gap-3">
-          <Select label="Semana" value={weekId} onChange={setWeekId} options={weeks.map((week) => ({ value: week.id, label: `${week.label} - ${week.status}` }))} />
+          <Select label="Semana" value={weekId} onChange={(value) => { setWeekId(value); void loadRanking(value); }} options={weeks.map((week) => ({ value: week.id, label: `${week.label} - ${week.status}` }))} />
           <Button type="button" onClick={() => loadRanking(weekId)} disabled={loading}>
             <RefreshCw className="size-4" />
             {loading ? "Carregando..." : "Atualizar"}
@@ -81,9 +98,9 @@ export default function OverweightPage() {
       </Card>
 
       <div className="grid gap-4 md:grid-cols-3">
-        <StatCard label="Sobrepeso total" value={formatKg(totalOverweight)} status={criticalRows > 0 ? "ATTENTION" : "OK"} />
-        <StatCard label="Percentual medio" value={formatPercent(totalPercent)} status={totalPercent > 0.02 ? "ATTENTION" : "OK"} />
-        <StatCard label="Produtos em alerta" value={String(criticalRows)} status={criticalRows > 0 ? "ATTENTION" : "OK"} />
+        <StatCard label="Sobrepeso total" value={formatKg(totalOverweight)} />
+        <StatCard label="Percentual medio" value={formatPercent(displayedPercent)} hint={overweightGoal.hint} status={overweightGoal.status} />
+        <StatCard label="Produtos em alerta" value={String(criticalRows)} hint="Status individual calculado pela API." />
       </div>
 
       <DataTable
@@ -108,7 +125,7 @@ function Select({ label, value, onChange, options }: { label: string; value: str
     <label className="min-w-64 space-y-2">
       <span className="text-xs uppercase text-slate-400">{label}</span>
       <select className="w-full rounded-md border border-[var(--line)] bg-[#07101d] px-3 py-2 text-sm outline-none focus:border-cyan-300/60" value={value} onChange={(event) => onChange(event.target.value)}>
-        <option value="">Todas</option>
+        <option value="">Selecione</option>
         {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
       </select>
     </label>

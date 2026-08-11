@@ -4,7 +4,11 @@ npm-debug.log*
 out
 dist
 .DS_Store
-.env
-.env.*.local
+.env*
+**/.env*
+!.env.example
+!**/.env.example
+!.env.bootstrap.example
+!.env.restore.example
 .vscode
 .git

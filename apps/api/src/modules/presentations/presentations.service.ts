@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../../infrastructure/database/prisma.service";
 import { CurrentUser } from "../../infrastructure/security/current-user";
 import { AuditService } from "../audit/audit.service";
@@ -15,21 +15,30 @@ export class PresentationsService {
   ) {}
 
   async executiveDeck(weekId?: string, user?: CurrentUser) {
-    const kpis = await this.dashboard.kpis(weekId);
-    const charts = await this.dashboard.charts(weekId);
+    const week = weekId
+      ? await this.prisma.weeklyPeriod.findUnique({ where: { id: weekId } })
+      : await this.prisma.weeklyPeriod.findFirst({ where: { deletedAt: null }, orderBy: { endsOn: "desc" } });
+    if (weekId && !week) throw new NotFoundException("Semana nao encontrada.");
+    const selectedWeekId = week?.id;
+    const kpis = await this.dashboard.kpis(selectedWeekId);
+    const [charts, alerts] = await Promise.all([this.dashboard.charts(selectedWeekId), this.dashboard.alerts(selectedWeekId)]);
     const payload = {
       generatedAt: new Date().toISOString(),
+      source: "database",
+      week: week
+        ? { id: week.id, label: week.label, startsOn: week.startsOn, endsOn: week.endsOn, status: week.status }
+        : null,
       slides: [
-        { title: "Capa", kind: "cover", data: { weekId } },
+        { title: "Capa", kind: "cover", data: { weekId: selectedWeekId } },
         { title: "Resumo executivo", kind: "kpis", data: kpis },
         { title: "Producao", kind: "production", data: charts.productionBySector },
         { title: "Perdas e sobrepeso", kind: "losses", data: charts.productionBySector },
         { title: "Paradas", kind: "downtime", data: charts.downtimeByReason },
-        { title: "Plano de acao", kind: "action-plan", data: [] }
+        { title: "Plano de acao", kind: "action-plan", data: alerts.filter((alert) => alert.status !== "OK") }
       ]
     };
     const exportRow = await this.prisma.presentationExport.create({
-      data: { type: "executive-deck", filters: { weekId }, payload, status: "GENERATED", createdBy: this.safeUserId(user) }
+      data: { type: "executive-deck", filters: { weekId: selectedWeekId }, payload, status: "GENERATED", createdBy: this.safeUserId(user) }
     });
     await this.audit.record({
       userId: this.safeUserId(user),

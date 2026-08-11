@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Archive, CheckCircle2, FolderPlus, RefreshCw, RotateCcw } from "lucide-react";
+import { Archive, CheckCircle2, ClipboardCheck, FolderPlus, RefreshCw, RotateCcw } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { DataTable } from "@/components/tables/data-table";
 import { Button } from "@/components/ui/button";
@@ -43,13 +43,14 @@ export default function WeeksPage() {
   const [weeks, setWeeks] = useState<WeekRow[]>([]);
   const [message, setMessage] = useState("Carregando semanas da API.");
   const [loading, setLoading] = useState(false);
-  const token = useMemo(() => getSession()?.accessToken, []);
+  const [reopenReason, setReopenReason] = useState("");
+  const session = useMemo(() => getSession(), []);
 
   async function loadWeeks() {
-    if (!token) return;
+    if (!session) return;
     setLoading(true);
     try {
-      const data = await apiGetClient<WeekRow[]>("/weeks", token);
+      const data = await apiGetClient<WeekRow[]>("/weeks");
       setWeeks(data);
       setMessage(`${data.length} semana(s) carregada(s) da API.`);
     } catch (error) {
@@ -65,13 +66,13 @@ export default function WeeksPage() {
   }, []);
 
   async function createCurrentWeek() {
-    if (!token) {
+    if (!session) {
       setMessage("Entre no sistema para criar semanas reais.");
       return;
     }
     setLoading(true);
     try {
-      await apiPostClient("/weeks", currentWeekPayload(), token);
+      await apiPostClient("/weeks", currentWeekPayload());
       await loadWeeks();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Falha ao criar semana.");
@@ -80,14 +81,19 @@ export default function WeeksPage() {
     }
   }
 
-  async function changeStatus(id: string, action: "close" | "reopen" | "archive") {
-    if (!token) {
+  async function changeStatus(id: string, action: "review" | "close" | "reopen" | "archive") {
+    if (!session) {
       setMessage("Entre no sistema para alterar status de semanas.");
+      return;
+    }
+    if (action === "reopen" && !reopenReason.trim()) {
+      setMessage("Informe uma justificativa antes de reabrir a semana.");
       return;
     }
     setLoading(true);
     try {
-      await apiPatchClient(`/weeks/${id}/${action}`, action === "reopen" ? { reason: "Reabertura operacional via NEXUS." } : {}, token);
+      await apiPatchClient(`/weeks/${id}/${action}`, action === "reopen" ? { reason: reopenReason.trim() } : {});
+      if (action === "reopen") setReopenReason("");
       await loadWeeks();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Falha ao alterar semana.");
@@ -116,6 +122,16 @@ export default function WeeksPage() {
 
       <Card>
         <p className="text-sm text-slate-300">{message}</p>
+        <label className="mt-4 block text-sm text-slate-300" htmlFor="reopen-reason">
+          Justificativa para reabertura
+        </label>
+        <input
+          id="reopen-reason"
+          value={reopenReason}
+          onChange={(event) => setReopenReason(event.target.value)}
+          placeholder="Motivo obrigatório, registrado na auditoria"
+          className="mt-2 w-full rounded-xl border border-slate-400/30 bg-slate-950/60 px-4 py-3 text-sm text-white outline-none focus:border-cyan-300/60"
+        />
       </Card>
 
       <div className="grid gap-4 md:grid-cols-3">
@@ -132,18 +148,31 @@ export default function WeeksPage() {
           Status: week.status,
           Acoes: (
             <div className="flex flex-wrap gap-2">
-              <Button type="button" className="border-emerald-300/30 bg-emerald-300/10 text-emerald-100" onClick={() => changeStatus(week.id, "close")}>
-                <CheckCircle2 className="size-4" />
-                Fechar
-              </Button>
-              <Button type="button" className="border-amber-300/30 bg-amber-300/10 text-amber-100" onClick={() => changeStatus(week.id, "reopen")}>
-                <RotateCcw className="size-4" />
-                Reabrir
-              </Button>
-              <Button type="button" className="border-slate-400/30 bg-white/5" onClick={() => changeStatus(week.id, "archive")}>
-                <Archive className="size-4" />
-                Arquivar
-              </Button>
+              {week.status === "OPEN" ? (
+                <Button type="button" className="border-cyan-300/30 bg-cyan-300/10 text-cyan-100" onClick={() => changeStatus(week.id, "review")}>
+                  <ClipboardCheck className="size-4" />
+                  Enviar para revisão
+                </Button>
+              ) : null}
+              {week.status === "REVIEW" ? (
+                <Button type="button" className="border-emerald-300/30 bg-emerald-300/10 text-emerald-100" onClick={() => changeStatus(week.id, "close")}>
+                  <CheckCircle2 className="size-4" />
+                  Fechar
+                </Button>
+              ) : null}
+              {week.status === "CLOSED" ? (
+                <>
+                  <Button type="button" className="border-amber-300/30 bg-amber-300/10 text-amber-100" onClick={() => changeStatus(week.id, "reopen")}>
+                    <RotateCcw className="size-4" />
+                    Reabrir
+                  </Button>
+                  <Button type="button" className="border-slate-400/30 bg-white/5" onClick={() => changeStatus(week.id, "archive")}>
+                    <Archive className="size-4" />
+                    Arquivar
+                  </Button>
+                </>
+              ) : null}
+              {week.status === "ARCHIVED" ? <span className="text-xs text-slate-400">Imutável</span> : null}
             </div>
           )
         }))}

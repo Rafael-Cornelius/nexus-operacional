@@ -23,6 +23,11 @@ PowerShell may block `npm.ps1`; use `npm.cmd`.
 cd .\nexus-operacional
 npm.cmd install
 Copy-Item .env.example .env
+```
+
+Before running Prisma locally, fill `POSTGRES_PASSWORD`, `DATABASE_URL`, `JWT_ACCESS_SECRET` and `INITIAL_ADMIN_PASSWORD` in `.env`. The database URL must contain the same PostgreSQL password.
+
+```powershell
 npm.cmd run prisma:generate
 npm.cmd run prisma:migrate
 npm.cmd run prisma:seed
@@ -43,34 +48,61 @@ Create a local `.env` from the example and update secrets and public URLs:
 copy .env.example .env
 ```
 
+Generate independent secrets, then place them in `.env` (the example intentionally leaves them blank):
+
+```bash
+openssl rand -hex 32
+openssl rand -base64 48
+openssl rand -base64 32
+```
+
 Edit `.env` and set:
-- `POSTGRES_PASSWORD`
-- `JWT_ACCESS_SECRET`
-- `JWT_REFRESH_SECRET`
+
+- `POSTGRES_PASSWORD` to the hexadecimal value
+- `JWT_ACCESS_SECRET` to the independent base64 value
+- `BACKUP_ENCRYPTION_KEY` to the third, independent base64 value
+- `BACKUP_EXTERNAL_HOST_DIR` to a protected NAS/remote mount owned by UID/GID `1000:1000`
 - `WEB_ORIGIN` to your public frontend URL
-- `NEXT_PUBLIC_API_URL` to your public API URL
-- `DATABASE_URL` to point to your production database
+- `NEXT_PUBLIC_API_URL` to `/api`, keeping browser requests on the same origin
 
-Then start the stack:
+`NEXT_PUBLIC_API_URL` and `API_INTERNAL_URL` are embedded while building the
+web image. Rebuild `web` after changing either value.
+
+Docker Compose constructs the API `DATABASE_URL` from `POSTGRES_USER`, `POSTGRES_PASSWORD` and `POSTGRES_DB`. A direct API deployment outside Compose must set `DATABASE_URL` explicitly with a strong database password.
+
+Compose stops before creating containers when a required secret, `WEB_ORIGIN` or the external backup path is empty. The API also refuses to start with `NODE_ENV=production` when the JWT secret, database password, Web origin or backup key is missing, malformed, insecure or resembles a known placeholder. Production cookies accept only `SameSite=Lax/Strict`, and unsafe browser requests must come from the configured same origin. Development keeps its isolated fallback only when `NODE_ENV` is not `production`.
+
+Build the images and start PostgreSQL first. Keep API/Web stopped while the schema changes:
 
 ```powershell
-docker compose up -d --build
+docker compose build api web
+docker compose stop web api
+docker compose up -d postgres
 ```
 
-Apply Prisma migrations and seed data:
+Apply Prisma migrations and the clean operational bootstrap in one-off API containers, then start the application:
 
 ```powershell
-docker compose exec api npx prisma migrate deploy
-docker compose exec api npm run prisma:seed
+docker compose run --rm api npm run prisma:deploy
+docker compose run --rm --env-from-file .env.bootstrap api npm run prisma:seed
+docker compose run --rm --env-from-file .env.bootstrap api npm run bootstrap:assert-clean
 ```
+
+Do not start API/Web yet. Complete the encrypted backup, external checksum and disposable-database restore proof in `docs/production-deploy.md`. Only after `RESTORE_PROOF_PASSED` may you run `docker compose up -d --wait --wait-timeout 180 api web`.
+
+Copy `.env.bootstrap.example` to a mode-`0600` `.env.bootstrap`; it contains only `INITIAL_ADMIN_EMAIL`, `INITIAL_ADMIN_PASSWORD`, `INITIAL_ADMIN_NAME`, `INITIAL_ADMIN_ROTATE_PASSWORD` and optional `COMPANY_NAME`, and is ignored by Git. The default seed creates only that administrator, RBAC permissions/roles and the optional company name. It never creates products, goals, weeks or operational records. Bootstrap credentials are injected only into that disposable seed container; remove the password from `.env.bootstrap` after the first verified login. Re-running the seed for an existing administrator does not require or rotate that password. Demo catalog data is isolated in `prisma/seed-demo.ts`, refuses production mode and is not part of normal deployment.
+
+Starting from zero requires a new, empty PostgreSQL database/volume. The seed is intentionally non-destructive and never erases an existing database. `bootstrap:assert-clean` checks every application table; it permits only one active administrator, RBAC rows and the optional `company` setting, and aborts if any master, operational, import, audit, report, snapshot or backup row already exists.
+
+Run `bootstrap:assert-clean` only on the first empty deployment. Updates to a database with real data must create and prove a native encrypted backup before migrations, then skip that clean-bootstrap assertion. The controlled upgrade sequence is documented in `docs/production-deploy.md`.
 
 If you need a lightweight production deployment on the same host, you can keep using the same `docker-compose.yml` with the production values in `.env`.
 
 ## Public demo deployment
 
-The repository includes a manual GitHub Actions workflow for a static public demo only. It must not be used as the operational deployment for real company data.
+The repository includes a GitHub Actions workflow for a static public demo only. It validates the Chromium preview and updates automatically from `main` and the homologation branch. It must not be used as the operational deployment for real company data.
 
-- Frontend build: `NEXT_PUBLIC_DEMO_MODE=true npm run build --workspace=@nexus/web`
+- Frontend build: `NEXUS_STATIC_DEMO=true NEXT_PUBLIC_DEMO_MODE=true npm run build --workspace=@nexus/web`
 - Pages artifact: `apps/web/out`
 
 When the manual workflow is approved and GitHub Pages is enabled for this repository, the demo frontend will be published at:
@@ -97,7 +129,7 @@ See `docs/production-deploy.md` for a step-by-step production deployment guide.
 - Email: value from `INITIAL_ADMIN_EMAIL`
 - Password: value from `INITIAL_ADMIN_PASSWORD`
 
-Set a temporary strong password in `.env` before running `npm.cmd run prisma:seed`, then change it before real company use.
+Set a unique strong password in the ignored, mode-`0600` `.env.bootstrap` before the first seed and save it in a password manager. The bootstrap enforces the same password policy as user administration. Remove `INITIAL_ADMIN_PASSWORD` from that file after the first verified login. Re-running the seed preserves an existing password without needing that variable; intentional rotation requires a new value plus `INITIAL_ADMIN_ROTATE_PASSWORD=true` and revokes prior sessions.
 
 ## Legacy workbook import
 
@@ -143,10 +175,19 @@ Implemented foundation:
 - P1/P2 form calculation preview connected to `/api/production/preview`.
 - Unit tests for production and downtime calculation.
 - Unit tests for auth/RBAC guards.
+- Clean production bootstrap: RBAC and the configured administrator only, with no operational records.
+- Protected base-data administration for sectors, production lines, loss types and downtime reasons.
+- Versioned approval workflows for production, losses, downtime, dosage and productivity.
+- Human governance for ambiguous calculation rules; dependent approvals fail closed.
+- Atomic mutation/audit boundaries for the central operational and user-management flows.
+- Encrypted backup creation and destructive-operation-safe restore proof in a separate empty PostgreSQL database.
+- Operational end-to-end flow with independent submitter/approver roles, weekly close, reports, snapshot, reopen and audit evidence.
 
-Next production hardening:
+Release boundary:
 
-- Run Prisma migrations against a live PostgreSQL instance.
-- Import the full workbook rows into normalized tables.
-- Add PDF/XLSX generation workers.
-- Connect frontend forms to authenticated API mutations after the first real product/week IDs exist in PostgreSQL.
+- GitHub Pages is a public static demo and never an operational deployment.
+- Daily production use requires a provisioned host/domain/TLS certificate, PostgreSQL, external backups, monitoring and environment-specific restore exercise.
+- Replacing Excel requires the original workbook to be reconciled again, human approval of ambiguous formulas and a successful parallel-operation period.
+- The workbook named in the audit is not currently present in this workspace, so final spreadsheet certification remains blocked until it is attached again.
+
+See [`docs/go-live-readiness-2026-08-01.md`](docs/go-live-readiness-2026-08-01.md) for the explicit release gate, [`docs/current-status.md`](docs/current-status.md) for the dated technical status and [`docs/production-deploy.md`](docs/production-deploy.md) for deployment controls.

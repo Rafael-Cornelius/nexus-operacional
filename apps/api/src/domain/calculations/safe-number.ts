@@ -31,6 +31,10 @@ export function safeDivide(numerator: number, denominator: number, fallback = 0)
   return Number.isFinite(result) ? result : fallback;
 }
 
+export function boundedRatio(numerator: number, denominator: number, fallback = 0): number {
+  return Math.min(Math.max(safeDivide(numerator, denominator, fallback), 0), 1);
+}
+
 export function nonNegative(value: number): number {
   return Number.isFinite(value) && value > 0 ? value : 0;
 }

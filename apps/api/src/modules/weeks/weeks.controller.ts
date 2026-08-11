@@ -21,6 +21,12 @@ export class WeeksController {
   }
 
   @Roles("ADMIN", "MANAGER", "SUPERVISOR")
+  @Patch(":id/review")
+  review(@Param("id") id: string, @CurrentUserData() user?: CurrentUser) {
+    return this.weeks.review(id, user);
+  }
+
+  @Roles("ADMIN", "MANAGER", "SUPERVISOR")
   @Patch(":id/close")
   close(@Param("id") id: string, @CurrentUserData() user?: CurrentUser) {
     return this.weeks.close(id, user);
@@ -36,5 +42,11 @@ export class WeeksController {
   @Patch(":id/archive")
   archive(@Param("id") id: string, @CurrentUserData() user?: CurrentUser) {
     return this.weeks.archive(id, user);
+  }
+
+  @Roles("ADMIN", "MANAGER", "SUPERVISOR", "VIEWER")
+  @Get(":id/snapshot")
+  snapshot(@Param("id") id: string) {
+    return this.weeks.snapshot(id);
   }
 }

@@ -2,6 +2,14 @@ name: Deploy demo frontend to GitHub Pages
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+      - agent/corrige-auditoria-operacional
+
+concurrency:
+  group: nexus-demo-pages
+  cancel-in-progress: true
 
 jobs:
   pages:
@@ -13,16 +21,16 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 22
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Generate Prisma client
         run: npm run prisma:generate
@@ -38,22 +46,38 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Install browser for preview validation
+        run: npx playwright install --with-deps chromium
+
+      - name: Validate preview flows before publication
+        run: npm run test:e2e
+        env:
+          NEXT_PUBLIC_DEMO_MODE: "true"
+          NEXT_PUBLIC_DEMO_ADMIN_EMAIL: "admin@demo.nexus.local"
+          NEXT_PUBLIC_DEMO_ADMIN_PASSWORD: "NexusDemo@2026"
+
       - name: Build frontend
         working-directory: apps/web
         run: npm run build
         env:
           NEXT_PUBLIC_DEMO_MODE: "true"
+          NEXT_PUBLIC_DEMO_ADMIN_EMAIL: "admin@demo.nexus.local"
+          NEXT_PUBLIC_DEMO_ADMIN_PASSWORD: "NexusDemo@2026"
+          NEXUS_STATIC_DEMO: "true"
+
+      - name: Validate the exported Pages artifact and base path
+        run: npm run test:e2e:pages
 
       - name: Add Pages nojekyll marker
         run: touch apps/web/out/.nojekyll
 
       - name: Configure Pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
         with:
           path: apps/web/out
 
       - name: Deploy to GitHub Pages
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4

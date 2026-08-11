@@ -1,5 +1,6 @@
 import { DowntimeCalculationInput, DowntimeCalculationResult, AlertStatus } from "./types";
-import { nonNegative, round, safeDivide } from "./safe-number";
+import { boundedRatio, nonNegative, round, safeDivide } from "./safe-number";
+import { CALCULATION_RULE_IDS, calculationRuleVersions } from "./rule-registry";
 
 function minutesBetween(start: Date, end: Date): number {
   return (end.getTime() - start.getTime()) / 60_000;
@@ -27,8 +28,8 @@ export function calculateDowntime(input: DowntimeCalculationInput): DowntimeCalc
   const availableMinutes = nonNegative(availableMinutesRaw);
   const stoppedMinutes = Math.min(nonNegative(stoppedMinutesRaw), availableMinutes);
   const productiveMinutes = nonNegative(availableMinutes - stoppedMinutes);
-  const stoppedPercent = round(safeDivide(stoppedMinutes, availableMinutes), 6);
-  const efficiencyPercent = round(safeDivide(productiveMinutes, availableMinutes), 6);
+  const stoppedPercent = round(boundedRatio(stoppedMinutes, availableMinutes), 6);
+  const efficiencyPercent = round(boundedRatio(productiveMinutes, availableMinutes), 6);
   const realKgHour = round(safeDivide(input.producedMassKg, availableMinutes / 60), 3);
   const possibleKgHour = round(safeDivide(input.producedMassKg, productiveMinutes / 60), 3);
 
@@ -45,6 +46,16 @@ export function calculateDowntime(input: DowntimeCalculationInput): DowntimeCalc
     realKgHour,
     possibleKgHour,
     status: classifyDowntime(stoppedPercent),
-    inconsistencies
+    inconsistencies,
+    calculationRuleVersions: calculationRuleVersions(
+      CALCULATION_RULE_IDS.availableMinutes,
+      CALCULATION_RULE_IDS.stoppedMinutes,
+      CALCULATION_RULE_IDS.productiveMinutes,
+      CALCULATION_RULE_IDS.stoppedPercent,
+      CALCULATION_RULE_IDS.efficiencyPercent,
+      CALCULATION_RULE_IDS.realKgHour,
+      CALCULATION_RULE_IDS.possibleKgHour,
+      CALCULATION_RULE_IDS.downtimeStatus
+    )
   };
 }

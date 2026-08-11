@@ -42,4 +42,22 @@ describe("frontend security boundary", () => {
 
     expect(offenders).toEqual([]);
   });
+
+  it("uses only HTTP-only cookie sessions in the browser client", () => {
+    const apiClient = readFileSync(join(webRoot, "services/api.ts"), "utf-8");
+    expect(apiClient).not.toContain("Authorization");
+    expect(apiClient).not.toContain("accessToken");
+    expect(apiClient).toContain('credentials: "include"');
+  });
+
+  it("keeps demo fixtures isolated from operational frontend code", () => {
+    expect(existsSync(join(webRoot, "lib/demo-data.ts"))).toBe(false);
+    expect(existsSync(join(webRoot, "lib/demo/operational-preview.ts"))).toBe(true);
+  });
+
+  it("does not bypass lint or force static export in operational builds", () => {
+    const config = readFileSync(join(webRoot, "next.config.ts"), "utf-8");
+    expect(config).not.toContain("ignoreDuringBuilds");
+    expect(config).toContain('process.env.NEXUS_STATIC_DEMO === "true"');
+  });
 });

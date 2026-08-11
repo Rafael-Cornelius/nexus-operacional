@@ -30,4 +30,22 @@ export class DashboardController {
   charts(@Query("weekId") weekId?: string) {
     return this.dashboard.charts(weekId);
   }
+
+  @Roles("ADMIN", "MANAGER", "SUPERVISOR", "VIEWER")
+  @Get("dashboard/comparison")
+  comparison(@Query("weekId") weekId?: string) {
+    return this.dashboard.comparison(weekId);
+  }
+
+  @Roles("ADMIN", "MANAGER", "SUPERVISOR", "VIEWER")
+  @Get("dashboard/alerts")
+  alerts(@Query("weekId") weekId?: string) {
+    return this.dashboard.alerts(weekId);
+  }
+
+  @Roles("ADMIN", "MANAGER", "SUPERVISOR", "VIEWER")
+  @Get("dashboard/calculation-rules")
+  calculationRules() {
+    return this.dashboard.calculationRules();
+  }
 }
