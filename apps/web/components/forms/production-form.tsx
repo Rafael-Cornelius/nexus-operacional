@@ -5,12 +5,32 @@ import { RefreshCw, RotateCcw, Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, StatusBadge } from "@/components/ui/card";
 import { DataTable } from "@/components/tables/data-table";
+import { TraceabilityFields } from "@/components/forms/traceability-fields";
 import { EntryWorkflowActions } from "@/components/workflow/entry-workflow-actions";
-import { createDemoProductionEntries, demoWorkflowProducts, demoWorkflowWeek } from "@/lib/demo/workflow-preview";
+import {
+  createDemoEquipmentRows,
+  createDemoShiftRows,
+} from "@/lib/demo/admin-reference-preview";
+import {
+  createDemoProductionEntries,
+  demoWorkflowProducts,
+  demoWorkflowWeek,
+} from "@/lib/demo/workflow-preview";
 import { formatCurrency, formatKg, formatPercent } from "@/lib/format";
+import { operationalDateInputValue } from "@/lib/operational-date";
+import {
+  traceabilityPayload,
+  type EquipmentReference,
+  type ShiftReference,
+} from "@/lib/operational-traceability";
 import type { WorkflowEntry } from "@/lib/operational-workflow";
 import { resolveExplicitWeekId } from "@/lib/week-selection";
-import { apiGetClient, apiPostClient, DEMO_MODE, getSession } from "@/services/api";
+import {
+  apiGetClient,
+  apiPostClient,
+  DEMO_MODE,
+  getSession,
+} from "@/services/api";
 
 interface FormState {
   productionOrder: string;
@@ -65,6 +85,9 @@ interface EntryRow extends WorkflowEntry {
   overweightCost?: string | number;
   status: string;
   product?: { code: string; name: string };
+  line?: { code: string; name: string } | null;
+  equipment?: { code: string; name: string } | null;
+  shift?: { code: string; name: string } | null;
 }
 
 interface PreviewState {
@@ -89,17 +112,33 @@ const EMPTY_PREVIEW: PreviewState = {
   productionCost: 0,
   lossesCost: 0,
   overweightCost: 0,
-  status: "OK"
+  status: "OK",
 };
 
 const DEMO_PREVIEW: Record<"P1" | "P2", PreviewState> = {
-  P1: { producedKg: 5040, expectedYieldKg: 5110, realYieldPercent: 0.986, overweightTotalKg: 7.2, overweightPercent: 0.001429, productionCost: 28224, lossesCost: 31.4, overweightCost: 40.32, status: "OK" },
-  P2: { producedKg: 2520, expectedYieldKg: 2590, realYieldPercent: 0.973, overweightTotalKg: 4.1, overweightPercent: 0.001627, productionCost: 14112, lossesCost: 18.2, overweightCost: 22.96, status: "OK" }
+  P1: {
+    producedKg: 5040,
+    expectedYieldKg: 5110,
+    realYieldPercent: 0.986,
+    overweightTotalKg: 7.2,
+    overweightPercent: 0.001429,
+    productionCost: 28224,
+    lossesCost: 31.4,
+    overweightCost: 40.32,
+    status: "OK",
+  },
+  P2: {
+    producedKg: 2520,
+    expectedYieldKg: 2590,
+    realYieldPercent: 0.973,
+    overweightTotalKg: 4.1,
+    overweightPercent: 0.001627,
+    productionCost: 14112,
+    lossesCost: 18.2,
+    overweightCost: 22.96,
+    status: "OK",
+  },
 };
-
-function today() {
-  return new Date().toISOString().slice(0, 10);
-}
 
 function productWeightConfig(product: ProductRow | undefined) {
   if (!product?.weightConfig) return null;
@@ -110,7 +149,9 @@ function productWeightConfig(product: ProductRow | undefined) {
     packagesPerBox: Number(product.weightConfig.packagesPerBox),
     massWeightKg: Number(product.weightConfig.massWeightKg),
     targetPackageWeightG: Number(product.weightConfig.targetPackageWeightG),
-    overweightTolerancePercent: Number(product.weightConfig.overweightTolerancePercent)
+    overweightTolerancePercent: Number(
+      product.weightConfig.overweightTolerancePercent,
+    ),
   };
 }
 
@@ -124,52 +165,88 @@ export function ProductionForm({ sector }: { sector: "P1" | "P2" }) {
     usedReworkKg: 0,
     weighingLossKg: 0,
     generatedReworkKg: 0,
-    notes: ""
+    notes: "",
   });
-  const [date, setDate] = useState(today());
+  const [date, setDate] = useState(operationalDateInputValue());
   const [products, setProducts] = useState<ProductRow[]>([]);
   const [weeks, setWeeks] = useState<WeekRow[]>([]);
+  const [equipment, setEquipment] = useState<EquipmentReference[]>([]);
+  const [shifts, setShifts] = useState<ShiftReference[]>([]);
   const [productId, setProductId] = useState("");
   const [weekId, setWeekId] = useState("");
+  const [lineId, setLineId] = useState("");
+  const [equipmentId, setEquipmentId] = useState("");
+  const [shiftId, setShiftId] = useState("");
   const [entries, setEntries] = useState<EntryRow[]>([]);
   const [serverPreview, setServerPreview] = useState<PreviewState | null>(null);
-  const [message, setMessage] = useState("Carregando produtos, semanas e lancamentos da API.");
+  const [message, setMessage] = useState(
+    "Carregando produtos, semanas e lancamentos da API.",
+  );
   const [loading, setLoading] = useState(false);
   const session = useMemo(() => getSession(), []);
 
   const selectedProduct = products.find((product) => product.id === productId);
-  const weightConfig = useMemo(() => productWeightConfig(selectedProduct), [selectedProduct]);
-  const preview = serverPreview ?? (DEMO_MODE ? DEMO_PREVIEW[sector] : EMPTY_PREVIEW);
+  const weightConfig = useMemo(
+    () => productWeightConfig(selectedProduct),
+    [selectedProduct],
+  );
+  const preview =
+    serverPreview ?? (DEMO_MODE ? DEMO_PREVIEW[sector] : EMPTY_PREVIEW);
 
   async function loadReferences() {
     if (!session) return;
     setLoading(true);
     try {
       if (DEMO_MODE) {
-        const sectorProducts = demoWorkflowProducts.filter((product) => product.defaultSector.code === sector);
+        const sectorProducts = demoWorkflowProducts.filter(
+          (product) => product.defaultSector.code === sector,
+        );
+        const demoEquipment = createDemoEquipmentRows();
         setProducts(sectorProducts);
         setWeeks([demoWorkflowWeek]);
+        setEquipment(demoEquipment);
+        setShifts(createDemoShiftRows());
         setProductId((current) => current || sectorProducts[0]?.id || "");
         setWeekId((current) => current || demoWorkflowWeek.id);
-        setMessage("Referências demonstrativas carregadas. As alterações ficam somente neste preview.");
+        setMessage(
+          "Referências demonstrativas carregadas. As alterações ficam somente neste preview.",
+        );
         return;
       }
-      const [productRows, weekRows] = await Promise.all([
-        apiGetClient<ProductRow[]>("/products?active=true"),
-        apiGetClient<WeekRow[]>("/weeks")
-      ]);
-      const sectorProducts = productRows.filter((product) => product.defaultSector?.code === sector || !product.defaultSector);
+      const [productRows, weekRows, equipmentRows, shiftRows] =
+        await Promise.all([
+          apiGetClient<ProductRow[]>("/products?active=true"),
+          apiGetClient<WeekRow[]>("/weeks"),
+          apiGetClient<EquipmentReference[]>("/equipment?active=true"),
+          apiGetClient<ShiftReference[]>("/shifts?active=true"),
+        ]);
+      const sectorProducts = productRows.filter(
+        (product) =>
+          product.defaultSector?.code === sector || !product.defaultSector,
+      );
       setProducts(sectorProducts);
       setWeeks(weekRows);
+      setEquipment(equipmentRows);
+      setShifts(shiftRows);
       setProductId((current) => current || sectorProducts[0]?.id || "");
       setWeekId((current) => resolveExplicitWeekId(weekRows, current));
-      setMessage(weekRows.length ? "Produtos e semanas carregados; selecione a semana do lançamento." : "Produtos carregados; nenhuma semana operacional cadastrada.");
+      setMessage(
+        weekRows.length
+          ? "Produtos e semanas carregados; selecione a semana do lançamento."
+          : "Produtos carregados; nenhuma semana operacional cadastrada.",
+      );
     } catch (error) {
       setProducts([]);
       setWeeks([]);
+      setEquipment([]);
+      setShifts([]);
       setProductId("");
       setWeekId("");
-      setMessage(error instanceof Error ? error.message : "Nao foi possivel carregar referencias da API.");
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Nao foi possivel carregar referencias da API.",
+      );
     } finally {
       setLoading(false);
     }
@@ -182,17 +259,27 @@ export function ProductionForm({ sector }: { sector: "P1" | "P2" }) {
       return;
     }
     if (DEMO_MODE) {
-      setEntries((current) => current.length ? current : createDemoProductionEntries(sector));
-      setMessage("Lançamentos demonstrativos carregados; o workflow funciona localmente.");
+      setEntries((current) =>
+        current.length ? current : createDemoProductionEntries(sector),
+      );
+      setMessage(
+        "Lançamentos demonstrativos carregados; o workflow funciona localmente.",
+      );
       return;
     }
     try {
       const query = new URLSearchParams({ sector, weekId: nextWeekId });
-      const data = await apiGetClient<EntryRow[]>(`/production?${query.toString()}`);
+      const data = await apiGetClient<EntryRow[]>(
+        `/production?${query.toString()}`,
+      );
       setEntries(data);
     } catch (error) {
       setEntries([]);
-      setMessage(error instanceof Error ? error.message : "Nao foi possivel carregar lancamentos da API.");
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Nao foi possivel carregar lancamentos da API.",
+      );
     }
   }
 
@@ -209,18 +296,21 @@ export function ProductionForm({ sector }: { sector: "P1" | "P2" }) {
     let active = true;
     const timer = window.setTimeout(async () => {
       try {
-        const response = await apiPostClient<PreviewState>("/production/preview", {
-          sector,
-          plannedBatches: state.plannedBatches,
-          realizedBatches: state.realizedBatches,
-          usedReworkKg: state.usedReworkKg,
-          packedBoxes: state.packedBoxes,
-          weighingLossKg: state.weighingLossKg,
-          generatedReworkKg: state.generatedReworkKg,
-          averagePackageWeightG: state.averagePackageWeightG,
-          weightConfig,
-          pricePerKg: Number(selectedProduct.pricePerKg ?? 0)
-        });
+        const response = await apiPostClient<PreviewState>(
+          "/production/preview",
+          {
+            sector,
+            plannedBatches: state.plannedBatches,
+            realizedBatches: state.realizedBatches,
+            usedReworkKg: state.usedReworkKg,
+            packedBoxes: state.packedBoxes,
+            weighingLossKg: state.weighingLossKg,
+            generatedReworkKg: state.generatedReworkKg,
+            averagePackageWeightG: state.averagePackageWeightG,
+            weightConfig,
+            pricePerKg: Number(selectedProduct.pricePerKg ?? 0),
+          },
+        );
         if (active) setServerPreview(response);
       } catch {
         if (active) setServerPreview(null);
@@ -240,33 +330,44 @@ export function ProductionForm({ sector }: { sector: "P1" | "P2" }) {
   async function validateWithBackend() {
     if (DEMO_MODE) {
       setServerPreview(DEMO_PREVIEW[sector]);
-      setMessage("Preview demonstrativo usa valores isolados; cálculos operacionais existem somente no backend.");
+      setMessage(
+        "Preview demonstrativo usa valores isolados; cálculos operacionais existem somente no backend.",
+      );
       return;
     }
     if (!weightConfig) {
       setServerPreview(null);
-      setMessage("Produto sem configuração de peso; cálculo bloqueado para revisão.");
+      setMessage(
+        "Produto sem configuração de peso; cálculo bloqueado para revisão.",
+      );
       return;
     }
     setLoading(true);
     try {
-      const response = await apiPostClient<PreviewState>("/production/preview", {
-        sector,
-        plannedBatches: state.plannedBatches,
-        realizedBatches: state.realizedBatches,
-        usedReworkKg: state.usedReworkKg,
-        packedBoxes: state.packedBoxes,
-        weighingLossKg: state.weighingLossKg,
-        generatedReworkKg: state.generatedReworkKg,
-        averagePackageWeightG: state.averagePackageWeightG,
-        weightConfig,
-        pricePerKg: Number(selectedProduct?.pricePerKg ?? 0)
-      });
+      const response = await apiPostClient<PreviewState>(
+        "/production/preview",
+        {
+          sector,
+          plannedBatches: state.plannedBatches,
+          realizedBatches: state.realizedBatches,
+          usedReworkKg: state.usedReworkKg,
+          packedBoxes: state.packedBoxes,
+          weighingLossKg: state.weighingLossKg,
+          generatedReworkKg: state.generatedReworkKg,
+          averagePackageWeightG: state.averagePackageWeightG,
+          weightConfig,
+          pricePerKg: Number(selectedProduct?.pricePerKg ?? 0),
+        },
+      );
       setServerPreview(response);
       setMessage("Calculo validado pela API de dominio.");
     } catch (caught) {
       setServerPreview(null);
-      setMessage(caught instanceof Error ? caught.message : "Nao foi possivel validar o calculo na API.");
+      setMessage(
+        caught instanceof Error
+          ? caught.message
+          : "Nao foi possivel validar o calculo na API.",
+      );
     } finally {
       setLoading(false);
     }
@@ -283,6 +384,14 @@ export function ProductionForm({ sector }: { sector: "P1" | "P2" }) {
     }
 
     if (DEMO_MODE) {
+      const selectedEquipment = equipment.find(
+        (item) => item.id === equipmentId,
+      );
+      const selectedLine =
+        selectedEquipment?.productionLine ??
+        equipment.find((item) => item.productionLineId === lineId)
+          ?.productionLine;
+      const selectedShift = shifts.find((item) => item.id === shiftId);
       const demoEntry: EntryRow = {
         id: `demo-production-${sector}-${Date.now()}`,
         date: `${date}T00:00:00.000Z`,
@@ -296,39 +405,52 @@ export function ProductionForm({ sector }: { sector: "P1" | "P2" }) {
         lossesCost: preview.lossesCost,
         overweightCost: preview.overweightCost,
         status: preview.status,
-        product: selectedProduct ? { code: selectedProduct.code, name: selectedProduct.name } : undefined,
+        product: selectedProduct
+          ? { code: selectedProduct.code, name: selectedProduct.name }
+          : undefined,
+        line: selectedLine
+          ? { code: selectedLine.code, name: selectedLine.name }
+          : null,
+        equipment: selectedEquipment
+          ? { code: selectedEquipment.code, name: selectedEquipment.name }
+          : null,
+        shift: selectedShift
+          ? { code: selectedShift.code, name: selectedShift.name }
+          : null,
         workflowStatus: "DRAFT",
-        version: 1
+        version: 1,
       };
       setEntries((current) => [demoEntry, ...current]);
-      setMessage("Rascunho criado localmente. Use Enviar para iniciar a aprovação demonstrativa.");
+      setMessage(
+        "Rascunho criado localmente. Use Enviar para iniciar a aprovação demonstrativa.",
+      );
       return;
     }
 
     setLoading(true);
     try {
-      await apiPostClient(
-        "/production",
-        {
-          weekId,
-          sector,
-          date,
-          productId,
-          productionOrder: state.productionOrder,
-          plannedBatches: state.plannedBatches,
-          realizedBatches: state.realizedBatches,
-          usedReworkKg: state.usedReworkKg,
-          packedBoxes: state.packedBoxes,
-          weighingLossKg: state.weighingLossKg,
-          generatedReworkKg: state.generatedReworkKg,
-          averagePackageWeightG: state.averagePackageWeightG,
-          notes: state.notes
-        }
-      );
+      await apiPostClient("/production", {
+        weekId,
+        sector,
+        ...traceabilityPayload({ lineId, equipmentId, shiftId }),
+        date,
+        productId,
+        productionOrder: state.productionOrder,
+        plannedBatches: state.plannedBatches,
+        realizedBatches: state.realizedBatches,
+        usedReworkKg: state.usedReworkKg,
+        packedBoxes: state.packedBoxes,
+        weighingLossKg: state.weighingLossKg,
+        generatedReworkKg: state.generatedReworkKg,
+        averagePackageWeightG: state.averagePackageWeightG,
+        notes: state.notes,
+      });
       setMessage("Lancamento salvo no banco e recalculado pelo backend.");
       await loadEntries(weekId);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Falha ao salvar lancamento.");
+      setMessage(
+        error instanceof Error ? error.message : "Falha ao salvar lancamento.",
+      );
     } finally {
       setLoading(false);
     }
@@ -340,52 +462,157 @@ export function ProductionForm({ sector }: { sector: "P1" | "P2" }) {
         <Card>
           <div className="mb-5 flex items-center justify-between">
             <div>
-              <h2 className="text-lg font-semibold">Lancamento diario {sector}</h2>
-              <p className="text-sm text-slate-400">Produto, semana e gravacao usam a API autenticada quando disponivel.</p>
+              <h2 className="text-lg font-semibold">
+                Lancamento diario {sector}
+              </h2>
+              <p className="text-sm text-slate-400">
+                Produto, semana e gravacao usam a API autenticada quando
+                disponivel.
+              </p>
             </div>
             <StatusBadge status={preview.status} />
           </div>
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            <SelectField label="Semana" value={weekId} onChange={setWeekId} options={weeks.map((week) => ({ value: week.id, label: `${week.label} - ${week.status}` }))} />
-            <SelectField label="Produto" value={productId} onChange={setProductId} options={products.map((product) => ({ value: product.id, label: `${product.code} - ${product.name}` }))} />
+            <SelectField
+              label="Semana"
+              value={weekId}
+              onChange={setWeekId}
+              options={weeks.map((week) => ({
+                value: week.id,
+                label: `${week.label} - ${week.status}`,
+              }))}
+            />
+            <SelectField
+              label="Produto"
+              value={productId}
+              onChange={setProductId}
+              options={products.map((product) => ({
+                value: product.id,
+                label: `${product.code} - ${product.name}`,
+              }))}
+            />
             <Field label="Data" type="date" value={date} onChange={setDate} />
-            <Field label="OP" value={state.productionOrder} onChange={(value) => update("productionOrder", value)} />
-            <NumberField label="Planejado bat." value={state.plannedBatches} onChange={(value) => update("plannedBatches", value)} />
-            <NumberField label="Realizado bat." value={state.realizedBatches} onChange={(value) => update("realizedBatches", value)} />
-            <NumberField label="Caixas embaladas" value={state.packedBoxes} onChange={(value) => update("packedBoxes", value)} />
-            <NumberField label="Peso medio pacote g" value={state.averagePackageWeightG} onChange={(value) => update("averagePackageWeightG", value)} />
-            {sector === "P1" ? <NumberField label="Reforma utilizada kg" value={state.usedReworkKg} onChange={(value) => update("usedReworkKg", value)} /> : null}
-            <NumberField label="Perda de pesagem kg" value={state.weighingLossKg} onChange={(value) => update("weighingLossKg", value)} />
-            <NumberField label="Reforma gerada kg" value={state.generatedReworkKg} onChange={(value) => update("generatedReworkKg", value)} />
-            <Field label="Observações" value={state.notes} onChange={(value) => update("notes", value)} />
+            <TraceabilityFields
+              sector={sector}
+              equipment={equipment}
+              shifts={shifts}
+              lineId={lineId}
+              equipmentId={equipmentId}
+              shiftId={shiftId}
+              onLineChange={setLineId}
+              onEquipmentChange={setEquipmentId}
+              onShiftChange={setShiftId}
+            />
+            <Field
+              label="OP"
+              value={state.productionOrder}
+              onChange={(value) => update("productionOrder", value)}
+            />
+            <NumberField
+              label="Planejado bat."
+              value={state.plannedBatches}
+              onChange={(value) => update("plannedBatches", value)}
+            />
+            <NumberField
+              label="Realizado bat."
+              value={state.realizedBatches}
+              onChange={(value) => update("realizedBatches", value)}
+            />
+            <NumberField
+              label="Caixas embaladas"
+              value={state.packedBoxes}
+              onChange={(value) => update("packedBoxes", value)}
+            />
+            <NumberField
+              label="Peso medio pacote g"
+              value={state.averagePackageWeightG}
+              onChange={(value) => update("averagePackageWeightG", value)}
+            />
+            {sector === "P1" ? (
+              <NumberField
+                label="Reforma utilizada kg"
+                value={state.usedReworkKg}
+                onChange={(value) => update("usedReworkKg", value)}
+              />
+            ) : null}
+            <NumberField
+              label="Perda de pesagem kg"
+              value={state.weighingLossKg}
+              onChange={(value) => update("weighingLossKg", value)}
+            />
+            <NumberField
+              label="Reforma gerada kg"
+              value={state.generatedReworkKg}
+              onChange={(value) => update("generatedReworkKg", value)}
+            />
+            <Field
+              label="Observações"
+              value={state.notes}
+              onChange={(value) => update("notes", value)}
+            />
           </div>
           <div className="mt-6 flex flex-wrap gap-3">
             <Button type="button" onClick={saveEntry} disabled={loading}>
               <Save className="size-4" />
               {loading ? "Processando..." : "Salvar lancamento"}
             </Button>
-            <Button type="button" className="border-slate-400/30 bg-white/5" onClick={validateWithBackend} disabled={loading}>
+            <Button
+              type="button"
+              className="border-slate-400/30 bg-white/5"
+              onClick={validateWithBackend}
+              disabled={loading}
+            >
               <RefreshCw className="size-4" />
               Validar calculo
             </Button>
-            <Button type="button" className="border-slate-400/30 bg-white/5" onClick={() => setServerPreview(null)}>
+            <Button
+              type="button"
+              className="border-slate-400/30 bg-white/5"
+              onClick={() => setServerPreview(null)}
+            >
               <RotateCcw className="size-4" />
               Limpar previa
             </Button>
           </div>
-          <p className="mt-4 rounded-md border border-[var(--line)] bg-white/5 px-3 py-2 text-sm text-slate-300">{message}</p>
+          <p className="mt-4 rounded-md border border-[var(--line)] bg-white/5 px-3 py-2 text-sm text-slate-300">
+            {message}
+          </p>
         </Card>
 
         <Card>
           <h2 className="mb-4 font-semibold">Previa tecnica</h2>
-          <Metric label="Total produzido" value={formatKg(preview.producedKg)} />
-          <Metric label="Rendimento esperado" value={formatKg(preview.expectedYieldKg)} />
-          <Metric label="Rendimento real" value={formatPercent(preview.realYieldPercent)} />
-          <Metric label="Sobrepeso total" value={formatKg(preview.overweightTotalKg)} />
-          <Metric label="Sobrepeso %" value={formatPercent(preview.overweightPercent)} />
-          <Metric label="Custo produção" value={formatCurrency(preview.productionCost)} />
-          <Metric label="Custo perdas" value={formatCurrency(preview.lossesCost)} />
-          <Metric label="Custo sobrepeso" value={formatCurrency(preview.overweightCost)} />
+          <Metric
+            label="Total produzido"
+            value={formatKg(preview.producedKg)}
+          />
+          <Metric
+            label="Rendimento esperado"
+            value={formatKg(preview.expectedYieldKg)}
+          />
+          <Metric
+            label="Rendimento real"
+            value={formatPercent(preview.realYieldPercent)}
+          />
+          <Metric
+            label="Sobrepeso total"
+            value={formatKg(preview.overweightTotalKg)}
+          />
+          <Metric
+            label="Sobrepeso %"
+            value={formatPercent(preview.overweightPercent)}
+          />
+          <Metric
+            label="Custo produção"
+            value={formatCurrency(preview.productionCost)}
+          />
+          <Metric
+            label="Custo perdas"
+            value={formatCurrency(preview.lossesCost)}
+          />
+          <Metric
+            label="Custo sobrepeso"
+            value={formatCurrency(preview.overweightCost)}
+          />
         </Card>
       </div>
 
@@ -395,15 +622,30 @@ export function ProductionForm({ sector }: { sector: "P1" | "P2" }) {
           entries.length
             ? entries.map((entry) => ({
                 Data: entry.date.slice(0, 10),
-                Produto: entry.product ? `${entry.product.code} - ${entry.product.name}` : "-",
+                Produto: entry.product
+                  ? `${entry.product.code} - ${entry.product.name}`
+                  : "-",
+                Linha: entry.line
+                  ? `${entry.line.code} - ${entry.line.name}`
+                  : "-",
+                Equipamento: entry.equipment
+                  ? `${entry.equipment.code} - ${entry.equipment.name}`
+                  : "-",
+                Turno: entry.shift
+                  ? `${entry.shift.code} - ${entry.shift.name}`
+                  : "-",
                 OP: entry.productionOrder,
                 Caixas: Number(entry.packedBoxes).toLocaleString("pt-BR"),
                 Produzido: formatKg(Number(entry.producedKg)),
                 Rendimento: formatPercent(Number(entry.realYieldPercent)),
                 Sobrepeso: formatKg(Number(entry.overweightTotalKg)),
-                "Custo produção": formatCurrency(Number(entry.productionCost ?? 0)),
+                "Custo produção": formatCurrency(
+                  Number(entry.productionCost ?? 0),
+                ),
                 "Custo perdas": formatCurrency(Number(entry.lossesCost ?? 0)),
-                "Custo sobrepeso": formatCurrency(Number(entry.overweightCost ?? 0)),
+                "Custo sobrepeso": formatCurrency(
+                  Number(entry.overweightCost ?? 0),
+                ),
                 Status: entry.status,
                 Fluxo: (
                   <EntryWorkflowActions
@@ -414,35 +656,88 @@ export function ProductionForm({ sector }: { sector: "P1" | "P2" }) {
                     demo={DEMO_MODE}
                     disabled={loading}
                     onChanged={async (updated) => {
-                      if (DEMO_MODE) setEntries((current) => current.map((item) => item.id === updated.id ? updated : item));
+                      if (DEMO_MODE)
+                        setEntries((current) =>
+                          current.map((item) =>
+                            item.id === updated.id ? updated : item,
+                          ),
+                        );
                       else await loadEntries(weekId);
                     }}
                     onReload={() => loadEntries(weekId)}
                     onMessage={setMessage}
                   />
-                )
+                ),
               }))
-            : [{ Data: "-", Produto: "Nenhum lancamento carregado para a semana selecionada.", OP: "-", Caixas: "-", Produzido: "-", Rendimento: "-", Sobrepeso: "-", "Custo produção": "-", "Custo perdas": "-", "Custo sobrepeso": "-", Status: "-", Fluxo: <span>-</span> }]
+            : [
+                {
+                  Data: "-",
+                  Produto:
+                    "Nenhum lancamento carregado para a semana selecionada.",
+                  Linha: "-",
+                  Equipamento: "-",
+                  Turno: "-",
+                  OP: "-",
+                  Caixas: "-",
+                  Produzido: "-",
+                  Rendimento: "-",
+                  Sobrepeso: "-",
+                  "Custo produção": "-",
+                  "Custo perdas": "-",
+                  "Custo sobrepeso": "-",
+                  Status: "-",
+                  Fluxo: <span>-</span>,
+                },
+              ]
         }
       />
     </div>
   );
 }
 
-function Field({ label, value, onChange, type = "text" }: { label: string; value: string; onChange: (value: string) => void; type?: string }) {
+function Field({
+  label,
+  value,
+  onChange,
+  type = "text",
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  type?: string;
+}) {
   return (
     <label className="space-y-2">
       <span className="text-xs uppercase text-slate-400">{label}</span>
-      <input type={type} className="w-full rounded-md border border-[var(--line)] bg-white/5 px-3 py-2 text-sm outline-none focus:border-cyan-300/60" value={value} onChange={(event) => onChange(event.target.value)} />
+      <input
+        type={type}
+        className="w-full rounded-md border border-[var(--line)] bg-white/5 px-3 py-2 text-sm outline-none focus:border-cyan-300/60"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
     </label>
   );
 }
 
-function SelectField({ label, value, onChange, options }: { label: string; value: string; onChange: (value: string) => void; options: Array<{ value: string; label: string }> }) {
+function SelectField({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: Array<{ value: string; label: string }>;
+}) {
   return (
     <label className="space-y-2">
       <span className="text-xs uppercase text-slate-400">{label}</span>
-      <select className="w-full rounded-md border border-[var(--line)] bg-[#07101d] px-3 py-2 text-sm outline-none focus:border-cyan-300/60" value={value} onChange={(event) => onChange(event.target.value)}>
+      <select
+        className="w-full rounded-md border border-[var(--line)] bg-[#07101d] px-3 py-2 text-sm outline-none focus:border-cyan-300/60"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      >
         <option value="">Selecione</option>
         {options.map((option) => (
           <option key={option.value} value={option.value}>
@@ -454,11 +749,24 @@ function SelectField({ label, value, onChange, options }: { label: string; value
   );
 }
 
-function NumberField({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
+function NumberField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  onChange: (value: number) => void;
+}) {
   return (
     <label className="space-y-2">
       <span className="text-xs uppercase text-slate-400">{label}</span>
-      <input type="number" className="w-full rounded-md border border-[var(--line)] bg-white/5 px-3 py-2 text-sm outline-none focus:border-cyan-300/60" value={value} onChange={(event) => onChange(Number(event.target.value))} />
+      <input
+        type="number"
+        className="w-full rounded-md border border-[var(--line)] bg-white/5 px-3 py-2 text-sm outline-none focus:border-cyan-300/60"
+        value={value}
+        onChange={(event) => onChange(Number(event.target.value))}
+      />
     </label>
   );
 }

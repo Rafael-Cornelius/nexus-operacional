@@ -2,14 +2,14 @@ const p1Line = {
   id: "11111111-1111-4111-8111-111111111111",
   code: "P1-L1",
   name: "Linha principal P1",
-  sector: { code: "P1", name: "Produção P1" }
+  sector: { code: "P1" as const, name: "Produção P1" }
 };
 
 const p2Line = {
   id: "22222222-2222-4222-8222-222222222222",
   code: "P2-L1",
   name: "Linha principal P2",
-  sector: { code: "P2", name: "Produção P2" }
+  sector: { code: "P2" as const, name: "Produção P2" }
 };
 
 const equipmentPreview = [

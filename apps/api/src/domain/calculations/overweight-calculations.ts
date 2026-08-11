@@ -1,6 +1,11 @@
 import { asFiniteNumber, nonNegative, round, safeDivide } from "./safe-number";
 import { CALCULATION_RULE_IDS, calculationRuleVersions } from "./rule-registry";
 
+export const OVERWEIGHT_RANKING_CALCULATION_RULE_VERSIONS = calculationRuleVersions(
+  CALCULATION_RULE_IDS.overweightRankingPercent,
+  CALCULATION_RULE_IDS.overweightRankingStatus
+);
+
 export function calculateOverweightRanking(overweightKg: number, producedKg: number, tolerancePercent: number) {
   const overweight = nonNegative(asFiniteNumber(overweightKg));
   const produced = nonNegative(asFiniteNumber(producedKg));
@@ -14,9 +19,6 @@ export function calculateOverweightRanking(overweightKg: number, producedKg: num
     overweightPercent,
     tolerancePercent: tolerance,
     status,
-    calculationRuleVersions: calculationRuleVersions(
-      CALCULATION_RULE_IDS.overweightRankingPercent,
-      CALCULATION_RULE_IDS.overweightRankingStatus
-    )
+    calculationRuleVersions: OVERWEIGHT_RANKING_CALCULATION_RULE_VERSIONS
   };
 }

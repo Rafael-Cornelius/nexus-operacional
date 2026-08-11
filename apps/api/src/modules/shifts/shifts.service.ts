@@ -43,53 +43,59 @@ export class ShiftsService {
 
   async create(payload: unknown, user?: CurrentUser) {
     const input = shiftSchema.parse(payload);
-    const duplicate = await this.prisma.shift.findUnique({ where: { code: input.code } });
-    if (duplicate && !duplicate.deletedAt) throw new ConflictException("Ja existe turno com este codigo.");
-    if (duplicate?.deletedAt) {
-      const restored = await this.prisma.shift.update({
-        where: { id: duplicate.id },
-        data: { ...input, startsAt: timeValue(input.startsAt), endsAt: timeValue(input.endsAt), deletedAt: null }
+    return this.prisma.$transaction(async (transaction) => {
+      const duplicate = await transaction.shift.findUnique({ where: { code: input.code } });
+      if (duplicate && !duplicate.deletedAt) throw new ConflictException("Ja existe turno com este codigo.");
+      if (duplicate?.deletedAt) {
+        const restored = await transaction.shift.update({
+          where: { id: duplicate.id },
+          data: { ...input, startsAt: timeValue(input.startsAt), endsAt: timeValue(input.endsAt), deletedAt: null }
+        });
+        const result = toDto(restored);
+        await this.audit.record({ userId: this.userId(user), module: "shifts", action: "restore", entity: "Shift", entityId: restored.id, before: toDto(duplicate), after: result }, transaction);
+        return result;
+      }
+      const shift = await transaction.shift.create({
+        data: { ...input, startsAt: timeValue(input.startsAt), endsAt: timeValue(input.endsAt) }
       });
-      const result = toDto(restored);
-      await this.audit.record({ userId: this.userId(user), module: "shifts", action: "restore", entity: "Shift", entityId: restored.id, before: toDto(duplicate), after: result });
+      const result = toDto(shift);
+      await this.audit.record({ userId: this.userId(user), module: "shifts", action: "create", entity: "Shift", entityId: shift.id, after: result }, transaction);
       return result;
-    }
-    const shift = await this.prisma.shift.create({
-      data: { ...input, startsAt: timeValue(input.startsAt), endsAt: timeValue(input.endsAt) }
     });
-    const result = toDto(shift);
-    await this.audit.record({ userId: this.userId(user), module: "shifts", action: "create", entity: "Shift", entityId: shift.id, after: result });
-    return result;
   }
 
   async update(id: string, payload: unknown, user?: CurrentUser) {
     const input = shiftSchema.partial().parse(payload);
-    const current = await this.prisma.shift.findUnique({ where: { id } });
-    if (!current || current.deletedAt) throw new NotFoundException("Turno nao encontrado.");
-    if (input.code) {
-      const duplicate = await this.prisma.shift.findFirst({ where: { id: { not: id }, code: input.code, deletedAt: null } });
-      if (duplicate) throw new ConflictException("Ja existe turno com este codigo.");
-    }
-    const shift = await this.prisma.shift.update({
-      where: { id },
-      data: {
-        ...input,
-        startsAt: input.startsAt ? timeValue(input.startsAt) : undefined,
-        endsAt: input.endsAt ? timeValue(input.endsAt) : undefined
+    return this.prisma.$transaction(async (transaction) => {
+      const current = await transaction.shift.findUnique({ where: { id } });
+      if (!current || current.deletedAt) throw new NotFoundException("Turno nao encontrado.");
+      if (input.code) {
+        const duplicate = await transaction.shift.findFirst({ where: { id: { not: id }, code: input.code, deletedAt: null } });
+        if (duplicate) throw new ConflictException("Ja existe turno com este codigo.");
       }
+      const shift = await transaction.shift.update({
+        where: { id },
+        data: {
+          ...input,
+          startsAt: input.startsAt ? timeValue(input.startsAt) : undefined,
+          endsAt: input.endsAt ? timeValue(input.endsAt) : undefined
+        }
+      });
+      const result = toDto(shift);
+      await this.audit.record({ userId: this.userId(user), module: "shifts", action: "update", entity: "Shift", entityId: id, before: toDto(current), after: result }, transaction);
+      return result;
     });
-    const result = toDto(shift);
-    await this.audit.record({ userId: this.userId(user), module: "shifts", action: "update", entity: "Shift", entityId: id, before: toDto(current), after: result });
-    return result;
   }
 
   async deactivate(id: string, user?: CurrentUser) {
-    const current = await this.prisma.shift.findUnique({ where: { id } });
-    if (!current || current.deletedAt) throw new NotFoundException("Turno nao encontrado.");
-    const shift = await this.prisma.shift.update({ where: { id }, data: { active: false, deletedAt: new Date() } });
-    const result = toDto(shift);
-    await this.audit.record({ userId: this.userId(user), module: "shifts", action: "deactivate", entity: "Shift", entityId: id, before: toDto(current), after: result });
-    return result;
+    return this.prisma.$transaction(async (transaction) => {
+      const current = await transaction.shift.findUnique({ where: { id } });
+      if (!current || current.deletedAt) throw new NotFoundException("Turno nao encontrado.");
+      const shift = await transaction.shift.update({ where: { id }, data: { active: false, deletedAt: new Date() } });
+      const result = toDto(shift);
+      await this.audit.record({ userId: this.userId(user), module: "shifts", action: "deactivate", entity: "Shift", entityId: id, before: toDto(current), after: result }, transaction);
+      return result;
+    });
   }
 
   private userId(user?: CurrentUser) {

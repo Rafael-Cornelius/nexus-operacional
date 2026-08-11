@@ -34,6 +34,7 @@ import {
 } from "../../domain/workflow/workflow-rules";
 import { AuditService } from "../audit/audit.service";
 import { CurrentUser } from "../../infrastructure/security/current-user";
+import { assertReviewRequiredCalculationRulesApproved } from "../calculation-rules/calculation-rules.service";
 
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -578,192 +579,206 @@ export class ProductionService {
 
   async softDelete(id: string, payload: unknown, user?: CurrentUser) {
     const command = versionedReasonCommandSchema.parse(payload);
-    const current = await this.prisma.productionEntry.findUnique({
-      where: { id },
-      include: { week: true },
-    });
-    if (!current || current.deletedAt)
-      throw new NotFoundException("Lancamento nao encontrado.");
-    if (current.week.deletedAt)
-      throw new BadRequestException("Semana removida nao permite exclusao.");
-    assertWeekWritable(
-      current.week,
-      "Semana fechada ou arquivada nao permite exclusao.",
-    );
-    assertCurrentVersion(current.version, command.version);
-    assertWorkflowState(
-      current.workflowStatus,
-      ["DRAFT", "SUBMITTED", "UNDER_REVIEW", "APPROVED", "REJECTED"],
-      "exclusao",
-    );
     const userId = this.requireActorId(user);
-    const entry = await this.updateWithVersion(id, command.version, {
-      deletedAt: new Date(),
-      workflowStatus: "CANCELLED",
-      updatedBy: userId,
+    return this.prisma.$transaction(async (transaction) => {
+      const current = await transaction.productionEntry.findUnique({
+        where: { id },
+        include: { week: true },
+      });
+      if (!current || current.deletedAt)
+        throw new NotFoundException("Lancamento nao encontrado.");
+      if (current.week.deletedAt)
+        throw new BadRequestException("Semana removida nao permite exclusao.");
+      assertWeekWritable(
+        current.week,
+        "Semana fechada ou arquivada nao permite exclusao.",
+      );
+      assertCurrentVersion(current.version, command.version);
+      assertWorkflowState(
+        current.workflowStatus,
+        ["DRAFT", "SUBMITTED", "UNDER_REVIEW", "APPROVED", "REJECTED"],
+        "exclusao",
+      );
+      const entry = await this.updateWithVersion(id, command.version, {
+        deletedAt: new Date(),
+        workflowStatus: "CANCELLED",
+        updatedBy: userId,
+      }, transaction);
+      await this.audit.record({
+        userId,
+        module: "production",
+        action: "delete",
+        entity: "ProductionEntry",
+        entityId: id,
+        before: current,
+        after: entry,
+        reason: command.reason,
+      }, transaction);
+      return entry;
     });
-    await this.audit.record({
-      userId,
-      module: "production",
-      action: "delete",
-      entity: "ProductionEntry",
-      entityId: id,
-      before: current,
-      after: entry,
-      reason: command.reason,
-    });
-    return entry;
   }
 
   async restore(id: string, payload: unknown, user?: CurrentUser) {
     const command = versionedReasonCommandSchema.parse(payload);
-    const current = await this.prisma.productionEntry.findUnique({
-      where: { id },
-      include: { week: true },
-    });
-    if (!current || !current.deletedAt)
-      throw new NotFoundException("Lancamento excluido nao encontrado.");
-    if (current.week.deletedAt)
-      throw new BadRequestException("Semana removida nao permite restauracao.");
-    assertWeekWritable(
-      current.week,
-      "Semana fechada ou arquivada nao permite restauracao.",
-    );
-    assertDateWithinWeek(
-      current.date,
-      current.week,
-      "Data do lancamento precisa pertencer ao periodo da semana selecionada.",
-    );
-    assertCurrentVersion(current.version, command.version);
     const userId = this.requireActorId(user);
-    const entry = await this.updateWithVersion(id, command.version, {
-      deletedAt: null,
-      workflowStatus: "DRAFT",
-      submittedAt: null,
-      submittedBy: null,
-      submissionReason: null,
-      approvedAt: null,
-      approvedBy: null,
-      approvalReason: null,
-      rejectedAt: null,
-      rejectedBy: null,
-      rejectionReason: null,
-      updatedBy: userId,
+    return this.prisma.$transaction(async (transaction) => {
+      const current = await transaction.productionEntry.findUnique({
+        where: { id },
+        include: { week: true },
+      });
+      if (!current || !current.deletedAt)
+        throw new NotFoundException("Lancamento excluido nao encontrado.");
+      if (current.week.deletedAt)
+        throw new BadRequestException("Semana removida nao permite restauracao.");
+      assertWeekWritable(
+        current.week,
+        "Semana fechada ou arquivada nao permite restauracao.",
+      );
+      assertDateWithinWeek(
+        current.date,
+        current.week,
+        "Data do lancamento precisa pertencer ao periodo da semana selecionada.",
+      );
+      assertCurrentVersion(current.version, command.version);
+      const entry = await this.updateWithVersion(id, command.version, {
+        deletedAt: null,
+        workflowStatus: "DRAFT",
+        submittedAt: null,
+        submittedBy: null,
+        submissionReason: null,
+        approvedAt: null,
+        approvedBy: null,
+        approvalReason: null,
+        rejectedAt: null,
+        rejectedBy: null,
+        rejectionReason: null,
+        updatedBy: userId,
+      }, transaction);
+      await this.audit.record({
+        userId,
+        module: "production",
+        action: "restore",
+        entity: "ProductionEntry",
+        entityId: id,
+        before: current,
+        after: entry,
+        reason: command.reason,
+      }, transaction);
+      return entry;
     });
-    await this.audit.record({
-      userId,
-      module: "production",
-      action: "restore",
-      entity: "ProductionEntry",
-      entityId: id,
-      before: current,
-      after: entry,
-      reason: command.reason,
-    });
-    return entry;
   }
 
   async submit(id: string, payload: unknown, user?: CurrentUser) {
     const command = versionedOptionalReasonCommandSchema.parse(payload);
-    const current = await this.workflowRecord(id, "submissao");
-    assertCurrentVersion(current.version, command.version);
-    assertWorkflowState(
-      current.workflowStatus,
-      ["DRAFT", "REJECTED"],
-      "submissao",
-    );
     const userId = this.requireActorId(user);
-    const entry = await this.updateWithVersion(id, command.version, {
-      workflowStatus: "SUBMITTED",
-      submittedAt: new Date(),
-      submittedBy: userId,
-      submissionReason: command.reason ?? null,
-      approvedAt: null,
-      approvedBy: null,
-      approvalReason: null,
-      rejectedAt: null,
-      rejectedBy: null,
-      rejectionReason: null,
-      updatedBy: userId,
+    return this.prisma.$transaction(async (transaction) => {
+      const current = await this.workflowRecord(id, "submissao", transaction);
+      assertCurrentVersion(current.version, command.version);
+      assertWorkflowState(
+        current.workflowStatus,
+        ["DRAFT", "REJECTED"],
+        "submissao",
+      );
+      const entry = await this.updateWithVersion(id, command.version, {
+        workflowStatus: "SUBMITTED",
+        submittedAt: new Date(),
+        submittedBy: userId,
+        submissionReason: command.reason ?? null,
+        approvedAt: null,
+        approvedBy: null,
+        approvalReason: null,
+        rejectedAt: null,
+        rejectedBy: null,
+        rejectionReason: null,
+        updatedBy: userId,
+      }, transaction);
+      await this.audit.record({
+        userId,
+        module: "production",
+        action: "submit",
+        entity: "ProductionEntry",
+        entityId: id,
+        before: current,
+        after: entry,
+        reason: command.reason,
+      }, transaction);
+      return entry;
     });
-    await this.audit.record({
-      userId,
-      module: "production",
-      action: "submit",
-      entity: "ProductionEntry",
-      entityId: id,
-      before: current,
-      after: entry,
-      reason: command.reason,
-    });
-    return entry;
   }
 
   async approve(id: string, payload: unknown, user?: CurrentUser) {
     const command = versionedOptionalReasonCommandSchema.parse(payload);
-    const current = await this.workflowRecord(id, "aprovacao");
-    assertCurrentVersion(current.version, command.version);
-    assertWorkflowState(
-      current.workflowStatus,
-      ["SUBMITTED", "UNDER_REVIEW"],
-      "aprovacao",
-    );
     const userId = this.requireActorId(user);
-    assertIndependentApprover(current.submittedBy, userId);
-    const entry = await this.updateWithVersion(id, command.version, {
-      workflowStatus: "APPROVED",
-      approvedAt: new Date(),
-      approvedBy: userId,
-      approvalReason: command.reason ?? null,
-      rejectedAt: null,
-      rejectedBy: null,
-      rejectionReason: null,
-      updatedBy: userId,
+    return this.prisma.$transaction(async (transaction) => {
+      const current = await this.workflowRecord(id, "aprovacao", transaction);
+      assertCurrentVersion(current.version, command.version);
+      assertWorkflowState(
+        current.workflowStatus,
+        ["SUBMITTED", "UNDER_REVIEW"],
+        "aprovacao",
+      );
+      assertIndependentApprover(current.submittedBy, userId);
+      await assertReviewRequiredCalculationRulesApproved(
+        transaction,
+        current.calculationRuleVersions,
+      );
+      const entry = await this.updateWithVersion(id, command.version, {
+        workflowStatus: "APPROVED",
+        approvedAt: new Date(),
+        approvedBy: userId,
+        approvalReason: command.reason ?? null,
+        rejectedAt: null,
+        rejectedBy: null,
+        rejectionReason: null,
+        updatedBy: userId,
+      }, transaction);
+      await this.audit.record({
+        userId,
+        module: "production",
+        action: "approve",
+        entity: "ProductionEntry",
+        entityId: id,
+        before: current,
+        after: entry,
+        reason: command.reason,
+      }, transaction);
+      return entry;
     });
-    await this.audit.record({
-      userId,
-      module: "production",
-      action: "approve",
-      entity: "ProductionEntry",
-      entityId: id,
-      before: current,
-      after: entry,
-      reason: command.reason,
-    });
-    return entry;
   }
 
   async reject(id: string, payload: unknown, user?: CurrentUser) {
     const command = versionedReasonCommandSchema.parse(payload);
-    const current = await this.workflowRecord(id, "rejeicao");
-    assertCurrentVersion(current.version, command.version);
-    assertWorkflowState(
-      current.workflowStatus,
-      ["SUBMITTED", "UNDER_REVIEW"],
-      "rejeicao",
-    );
     const userId = this.requireActorId(user);
-    const entry = await this.updateWithVersion(id, command.version, {
-      workflowStatus: "REJECTED",
-      rejectedAt: new Date(),
-      rejectedBy: userId,
-      rejectionReason: command.reason,
-      approvedAt: null,
-      approvedBy: null,
-      approvalReason: null,
-      updatedBy: userId,
+    return this.prisma.$transaction(async (transaction) => {
+      const current = await this.workflowRecord(id, "rejeicao", transaction);
+      assertCurrentVersion(current.version, command.version);
+      assertWorkflowState(
+        current.workflowStatus,
+        ["SUBMITTED", "UNDER_REVIEW"],
+        "rejeicao",
+      );
+      const entry = await this.updateWithVersion(id, command.version, {
+        workflowStatus: "REJECTED",
+        rejectedAt: new Date(),
+        rejectedBy: userId,
+        rejectionReason: command.reason,
+        approvedAt: null,
+        approvedBy: null,
+        approvalReason: null,
+        updatedBy: userId,
+      }, transaction);
+      await this.audit.record({
+        userId,
+        module: "production",
+        action: "reject",
+        entity: "ProductionEntry",
+        entityId: id,
+        before: current,
+        after: entry,
+        reason: command.reason,
+      }, transaction);
+      return entry;
     });
-    await this.audit.record({
-      userId,
-      module: "production",
-      action: "reject",
-      entity: "ProductionEntry",
-      entityId: id,
-      before: current,
-      after: entry,
-      reason: command.reason,
-    });
-    return entry;
   }
 
   private async lockProductionOrder(
@@ -1056,8 +1071,12 @@ export class ProductionService {
     return order;
   }
 
-  private async workflowRecord(id: string, action: string) {
-    const current = await this.prisma.productionEntry.findUnique({
+  private async workflowRecord(
+    id: string,
+    action: string,
+    client: Prisma.TransactionClient = this.prisma,
+  ) {
+    const current = await client.productionEntry.findUnique({
       where: { id },
       include: { week: true },
     });

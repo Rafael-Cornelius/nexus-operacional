@@ -62,8 +62,12 @@ describe("workflow and optimistic concurrency", () => {
     const submitted = { ...current, version: 2, workflowStatus: "SUBMITTED", submittedBy: actorId };
     const update = vi.fn().mockResolvedValue(submitted);
     const audit = vi.fn().mockResolvedValue(undefined);
+    const transaction = { productionEntry: { findUnique: vi.fn().mockResolvedValue(current), update } };
     const service = new ProductionService(
-      { productionEntry: { findUnique: vi.fn().mockResolvedValue(current), update } } as never,
+      {
+        ...transaction,
+        $transaction: vi.fn((operation: (client: typeof transaction) => unknown) => operation(transaction))
+      } as never,
       { record: audit } as never
     );
 
@@ -80,7 +84,8 @@ describe("workflow and optimistic concurrency", () => {
       })
     );
     expect(audit).toHaveBeenCalledWith(
-      expect.objectContaining({ action: "submit", before: current, after: submitted, reason: "Conferencia concluida" })
+      expect.objectContaining({ action: "submit", before: current, after: submitted, reason: "Conferencia concluida" }),
+      transaction
     );
   });
 
@@ -185,8 +190,12 @@ describe("workflow and optimistic concurrency", () => {
       week
     };
     const update = vi.fn().mockRejectedValue({ code: "P2025" });
+    const transaction = { productionEntry: { findUnique: vi.fn().mockResolvedValue(current), update } };
     const service = new ProductionService(
-      { productionEntry: { findUnique: vi.fn().mockResolvedValue(current), update } } as never,
+      {
+        ...transaction,
+        $transaction: vi.fn((operation: (client: typeof transaction) => unknown) => operation(transaction))
+      } as never,
       { record: vi.fn() } as never
     );
 
@@ -205,8 +214,12 @@ describe("workflow and optimistic concurrency", () => {
       week
     };
     const update = vi.fn();
+    const transaction = { productionEntry: { findUnique: vi.fn().mockResolvedValue(current), update } };
     const service = new ProductionService(
-      { productionEntry: { findUnique: vi.fn().mockResolvedValue(current), update } } as never,
+      {
+        ...transaction,
+        $transaction: vi.fn((operation: (client: typeof transaction) => unknown) => operation(transaction))
+      } as never,
       { record: vi.fn() } as never
     );
 

@@ -9,6 +9,7 @@ import { Prisma } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { PrismaService } from "../../infrastructure/database/prisma.service";
+import { strongPasswordSchema } from "../../infrastructure/security/password-policy";
 import { CurrentUser } from "../../infrastructure/security/current-user";
 import { AuditService } from "../audit/audit.service";
 
@@ -18,15 +19,6 @@ const roleCodeSchema = z.enum(roleCodes);
 type UserRoleCode = z.infer<typeof roleCodeSchema>;
 
 const emailSchema = z.string().trim().email().max(254).transform((value) => value.toLowerCase());
-const strongPasswordSchema = z.string()
-  .min(12, "A senha deve ter pelo menos 12 caracteres.")
-  .max(128, "A senha excede o tamanho permitido.")
-  .regex(/[a-z]/, "A senha deve conter letra minuscula.")
-  .regex(/[A-Z]/, "A senha deve conter letra maiuscula.")
-  .regex(/[0-9]/, "A senha deve conter numero.")
-  .regex(/[^A-Za-z0-9\s]/, "A senha deve conter simbolo.")
-  .refine((value) => value === value.trim(), "A senha nao pode iniciar ou terminar com espacos.")
-  .refine((value) => Buffer.byteLength(value, "utf8") <= 72, "A senha excede o limite seguro do bcrypt.");
 const rolesSchema = z.array(roleCodeSchema)
   .min(1, "Selecione pelo menos um papel.")
   .max(roleCodes.length)
@@ -112,10 +104,11 @@ export class UsersService {
           data: roles.map((role) => ({ userId: user.id, roleId: role.id })),
           skipDuplicates: true
         });
-        return transaction.user.findUniqueOrThrow({ where: { id: user.id }, select: safeUserSelect });
+        const created = await transaction.user.findUniqueOrThrow({ where: { id: user.id }, select: safeUserSelect });
+        await this.recordAudit("create", created, currentUser, undefined, created, transaction);
+        return created;
       });
 
-      await this.recordAudit("create", created, currentUser, undefined, created);
       return created;
     } catch (error) {
       this.rethrowKnownWriteError(error);
@@ -127,7 +120,7 @@ export class UsersService {
     if (input.active === false) this.assertNotSelf(id, currentUser, "Voce nao pode desativar o proprio usuario.");
 
     try {
-      const { before, after } = await this.serializable(async (transaction) => {
+      const { after } = await this.serializable(async (transaction) => {
         const current = await this.findUser(transaction, id, false);
         if (input.active === false) await this.assertNotLastActiveAdmin(transaction, current);
         if (input.email && input.email !== current.email.toLowerCase()) {
@@ -147,10 +140,10 @@ export class UsersService {
           },
           select: safeUserSelect
         });
+        await this.recordAudit("update", updated, currentUser, current, updated, transaction);
         return { before: current, after: updated };
       });
 
-      await this.recordAudit("update", after, currentUser, before, after);
       return after;
     } catch (error) {
       this.rethrowKnownWriteError(error);
@@ -163,7 +156,7 @@ export class UsersService {
       throw new ForbiddenException("Voce nao pode remover o proprio papel de administrador.");
     }
 
-    const { before, after } = await this.serializable(async (transaction) => {
+    const { after } = await this.serializable(async (transaction) => {
       const current = await this.findUser(transaction, id, false);
       if (this.hasAdminRole(current) && !input.roles.includes("ADMIN")) {
         await this.assertNotLastActiveAdmin(transaction, current);
@@ -179,15 +172,15 @@ export class UsersService {
         data: { sessionVersion: { increment: 1 } },
         select: safeUserSelect
       });
+      await this.recordAudit("update_roles", updated, currentUser, current, updated, transaction);
       return { before: current, after: updated };
     });
 
-    await this.recordAudit("update_roles", after, currentUser, before, after);
     return after;
   }
 
   async activate(id: string, currentUser?: CurrentUser) {
-    const { before, after } = await this.serializable(async (transaction) => {
+    const { after } = await this.serializable(async (transaction) => {
       const current = await this.findUser(transaction, id, false);
       if (current.active) throw new ConflictException("Usuario ja esta ativo.");
       const updated = await transaction.user.update({
@@ -195,15 +188,15 @@ export class UsersService {
         data: { active: true, sessionVersion: { increment: 1 } },
         select: safeUserSelect
       });
+      await this.recordAudit("activate", updated, currentUser, current, updated, transaction);
       return { before: current, after: updated };
     });
-    await this.recordAudit("activate", after, currentUser, before, after);
     return after;
   }
 
   async deactivate(id: string, currentUser?: CurrentUser) {
     this.assertNotSelf(id, currentUser, "Voce nao pode desativar o proprio usuario.");
-    const { before, after } = await this.serializable(async (transaction) => {
+    const { after } = await this.serializable(async (transaction) => {
       const current = await this.findUser(transaction, id, false);
       if (!current.active) throw new ConflictException("Usuario ja esta inativo.");
       await this.assertNotLastActiveAdmin(transaction, current);
@@ -212,40 +205,40 @@ export class UsersService {
         data: { active: false, sessionVersion: { increment: 1 } },
         select: safeUserSelect
       });
+      await this.recordAudit("deactivate", updated, currentUser, current, updated, transaction);
       return { before: current, after: updated };
     });
-    await this.recordAudit("deactivate", after, currentUser, before, after);
     return after;
   }
 
   async resetPassword(id: string, payload: unknown, currentUser?: CurrentUser) {
     const input = resetPasswordSchema.parse(payload);
     const passwordHash = await bcrypt.hash(input.password, 12);
-    const { before, after } = await this.prisma.$transaction(async (transaction) => {
+    const { after } = await this.prisma.$transaction(async (transaction) => {
       const current = await this.findUser(transaction, id, false);
       const updated = await transaction.user.update({
         where: { id },
         data: { passwordHash, sessionVersion: { increment: 1 } },
         select: safeUserSelect
       });
+      await this.audit.record({
+        userId: this.safeUserId(currentUser),
+        module: "users",
+        action: "reset_password",
+        entity: "User",
+        entityId: id,
+        before: this.auditSnapshot(current),
+        after: { ...this.auditSnapshot(updated), credentialReset: true }
+      }, transaction);
       return { before: current, after: updated };
     });
 
-    await this.audit.record({
-      userId: this.safeUserId(currentUser),
-      module: "users",
-      action: "reset_password",
-      entity: "User",
-      entityId: id,
-      before: this.auditSnapshot(before),
-      after: { ...this.auditSnapshot(after), credentialReset: true }
-    });
     return { ...after, credentialReset: true };
   }
 
   async remove(id: string, currentUser?: CurrentUser) {
     this.assertNotSelf(id, currentUser, "Voce nao pode excluir o proprio usuario.");
-    const { before, after } = await this.serializable(async (transaction) => {
+    const { after } = await this.serializable(async (transaction) => {
       const current = await this.findUser(transaction, id, false);
       await this.assertNotLastActiveAdmin(transaction, current);
       const updated = await transaction.user.update({
@@ -253,14 +246,14 @@ export class UsersService {
         data: { active: false, deletedAt: new Date(), sessionVersion: { increment: 1 } },
         select: safeUserSelect
       });
+      await this.recordAudit("delete", updated, currentUser, current, updated, transaction);
       return { before: current, after: updated };
     });
-    await this.recordAudit("delete", after, currentUser, before, after);
     return after;
   }
 
   async restore(id: string, currentUser?: CurrentUser) {
-    const { before, after } = await this.serializable(async (transaction) => {
+    const { after } = await this.serializable(async (transaction) => {
       const current = await this.findUser(transaction, id, true);
       if (!current.deletedAt) throw new ConflictException("Usuario nao esta excluido.");
       const updated = await transaction.user.update({
@@ -268,32 +261,32 @@ export class UsersService {
         data: { active: false, deletedAt: null, sessionVersion: { increment: 1 } },
         select: safeUserSelect
       });
+      await this.recordAudit("restore", updated, currentUser, current, updated, transaction);
       return { before: current, after: updated };
     });
-    await this.recordAudit("restore", after, currentUser, before, after);
     return after;
   }
 
   async revokeSessions(id: string, currentUser?: CurrentUser) {
-    const { before, after } = await this.serializable(async (transaction) => {
+    const { after } = await this.serializable(async (transaction) => {
       const current = await this.findUser(transaction, id, true);
       const updated = await transaction.user.update({
         where: { id },
         data: { sessionVersion: { increment: 1 } },
         select: safeUserSelect
       });
+      await this.audit.record({
+        userId: this.safeUserId(currentUser),
+        module: "users",
+        action: "revoke_sessions",
+        entity: "User",
+        entityId: id,
+        before: this.auditSnapshot(current),
+        after: { ...this.auditSnapshot(updated), sessionsRevoked: true }
+      }, transaction);
       return { before: current, after: updated };
     });
 
-    await this.audit.record({
-      userId: this.safeUserId(currentUser),
-      module: "users",
-      action: "revoke_sessions",
-      entity: "User",
-      entityId: id,
-      before: this.auditSnapshot(before),
-      after: { ...this.auditSnapshot(after), sessionsRevoked: true }
-    });
     return { ...after, sessionsRevoked: true };
   }
 
@@ -364,8 +357,9 @@ export class UsersService {
     action: string,
     entity: SafeUser,
     currentUser: CurrentUser | undefined,
-    before?: SafeUser,
-    after?: SafeUser
+    before: SafeUser | undefined,
+    after: SafeUser | undefined,
+    client: Prisma.TransactionClient
   ) {
     await this.audit.record({
       userId: this.safeUserId(currentUser),
@@ -375,7 +369,7 @@ export class UsersService {
       entityId: entity.id,
       before: before ? this.auditSnapshot(before) : undefined,
       after: after ? this.auditSnapshot(after) : undefined
-    });
+    }, client);
   }
 
   private rethrowKnownWriteError(error: unknown): never {

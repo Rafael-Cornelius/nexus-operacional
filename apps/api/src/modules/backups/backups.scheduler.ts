@@ -12,7 +12,10 @@ export class BackupScheduler {
     private readonly config: ConfigService
   ) {}
 
-  @Cron("0 2 * * *", { name: "nexus-daily-backup" })
+  @Cron("0 2 * * *", {
+    name: "nexus-daily-backup",
+    timeZone: "America/Sao_Paulo"
+  })
   async createDailyBackup() {
     if (this.config.get<string>("BACKUP_SCHEDULE_ENABLED") !== "true") return;
 

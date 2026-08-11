@@ -1,10 +1,10 @@
-FROM node:22-alpine AS deps
+FROM node:22-alpine3.22@sha256:cd7807368cf24826297cbad5dca1a44972ccfd770647db52a8c7589eb4599ac8 AS deps
 WORKDIR /app
 COPY package.json package-lock.json* ./
 COPY apps/web/package.json apps/web/package.json
-RUN npm install
+RUN npm ci
 
-FROM node:22-alpine AS builder
+FROM node:22-alpine3.22@sha256:cd7807368cf24826297cbad5dca1a44972ccfd770647db52a8c7589eb4599ac8 AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
@@ -16,7 +16,7 @@ ENV NEXUS_STATIC_DEMO=false
 ENV NEXT_PUBLIC_DEMO_MODE=false
 RUN npm run build --workspace=@nexus/web
 
-FROM node:22-alpine AS runner
+FROM node:22-alpine3.22@sha256:cd7807368cf24826297cbad5dca1a44972ccfd770647db52a8c7589eb4599ac8 AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3000

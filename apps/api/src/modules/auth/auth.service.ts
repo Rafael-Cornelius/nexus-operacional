@@ -1,5 +1,6 @@
 import { Injectable, UnauthorizedException } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
+import { Prisma } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { PrismaService } from "../../infrastructure/database/prisma.service";
@@ -10,6 +11,8 @@ const loginSchema = z.object({
   email: z.string().trim().email().transform((value) => value.toLowerCase()),
   password: z.string().min(1)
 });
+
+const dummyPasswordHash = "$2b$12$kJfpfJPaVYZipQVHVpH7C.rhXc2WlFXr0C50jsJF.4xaJLUYDh1eC";
 
 @Injectable()
 export class AuthService {
@@ -26,21 +29,11 @@ export class AuthService {
       include: { roles: { include: { role: true } } }
     });
 
-    if (!user || !user.active || user.deletedAt) {
+    const valid = await bcrypt.compare(input.password, user?.passwordHash ?? dummyPasswordHash);
+    if (!user || !user.active || user.deletedAt || !valid) {
       await this.recordAuthEvent("login_failed", undefined, { email: input.email });
       throw new UnauthorizedException("Credenciais invalidas.");
     }
-
-    const valid = await bcrypt.compare(input.password, user.passwordHash);
-    if (!valid) {
-      await this.recordAuthEvent("login_failed", user.id, { email: input.email });
-      throw new UnauthorizedException("Credenciais invalidas.");
-    }
-
-    await this.prisma.user.update({
-      where: { id: user.id },
-      data: { lastLoginAt: new Date() }
-    });
 
     const roles = user.roles.map((item) => item.role.code);
     const accessToken = await this.jwt.signAsync({
@@ -48,7 +41,13 @@ export class AuthService {
       email: user.email,
       sv: user.sessionVersion
     });
-    await this.recordAuthEvent("login", user.id, { email: user.email, roles });
+    await this.prisma.$transaction(async (transaction) => {
+      await transaction.user.update({
+        where: { id: user.id },
+        data: { lastLoginAt: new Date() }
+      });
+      await this.recordAuthEvent("login", user.id, { email: user.email, roles }, transaction);
+    });
 
     return {
       accessToken,
@@ -97,7 +96,12 @@ export class AuthService {
     await this.recordAuthEvent("logout", currentUser.id, { email: currentUser.email, roles: currentUser.roles });
   }
 
-  private async recordAuthEvent(action: "login" | "login_failed" | "logout", userId: string | undefined, after: unknown) {
+  private async recordAuthEvent(
+    action: "login" | "login_failed" | "logout",
+    userId: string | undefined,
+    after: unknown,
+    client?: Prisma.TransactionClient
+  ) {
     await this.audit.record({
       userId,
       module: "auth",
@@ -105,6 +109,6 @@ export class AuthService {
       entity: "User",
       entityId: userId,
       after
-    });
+    }, client);
   }
 }

@@ -31,6 +31,8 @@ describe("frontend operational workflow", () => {
   it("builds the versioned transition endpoints and requires a review reason", () => {
     expect(workflowEndpoint("production", "entry/1", "submit")).toBe("/production/entry%2F1/submit");
     expect(workflowEndpoint("losses", "loss-1", "approve")).toBe("/losses/loss-1/approve");
+    expect(workflowEndpoint("dosage", "dosage-1", "reject")).toBe("/dosage/dosage-1/reject");
+    expect(workflowEndpoint("productivity", "productivity-1", "submit")).toBe("/productivity/productivity-1/submit");
     expect(workflowReasonError("submit", "")).toBeNull();
     expect(workflowReasonError("approve", "curto")).toBeNull();
     expect(workflowReasonError("reject", "não")).toContain("5 caracteres");
@@ -75,7 +77,9 @@ describe("frontend operational workflow", () => {
     const paths = [
       "apps/web/components/forms/production-form.tsx",
       "apps/web/app/perdas/page.tsx",
-      "apps/web/app/paradas/page.tsx"
+      "apps/web/app/paradas/page.tsx",
+      "apps/web/app/dosagem/page.tsx",
+      "apps/web/app/produtividade/page.tsx"
     ];
     for (const relativePath of paths) {
       const source = readFileSync(join(repoRoot, relativePath), "utf8");

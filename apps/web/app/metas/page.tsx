@@ -30,6 +30,7 @@ interface GoalRow {
   startsOn?: string | null;
   endsOn?: string | null;
   workflowStatus: GoalWorkflowStatus;
+  createdBy?: string | null;
   currentValue?: number | null;
   progress?: number | null;
   status?: string | null;
@@ -378,7 +379,8 @@ export default function GoalsPage() {
             <div className="flex min-w-52 flex-wrap gap-2">
               <SmallButton onClick={() => void loadGoals(weekId, statusFilter, goal.seriesId)}><History className="size-3" />Histórico</SmallButton>
               {canManage ? <SmallButton onClick={() => prepareVersion(goal)}><CopyPlus className="size-3" />Nova versão</SmallButton> : null}
-              {canManage && goal.workflowStatus === "DRAFT" ? <SmallButton onClick={() => void workflow(goal, "approve")}><CheckCircle2 className="size-3" />Aprovar</SmallButton> : null}
+              {canManage && goal.workflowStatus === "DRAFT" && goal.createdBy !== session?.user.id && goal.responsible?.id !== session?.user.id ? <SmallButton onClick={() => void workflow(goal, "approve")}><CheckCircle2 className="size-3" />Aprovar</SmallButton> : null}
+              {canManage && goal.workflowStatus === "DRAFT" && (goal.createdBy === session?.user.id || goal.responsible?.id === session?.user.id) ? <span className="self-center text-xs text-amber-200">Outro gestor deve aprovar</span> : null}
               {canManage && goal.workflowStatus !== "RETIRED" ? <SmallButton onClick={() => void workflow(goal, "retire")}><Archive className="size-3" />Retirar</SmallButton> : null}
             </div>
           )

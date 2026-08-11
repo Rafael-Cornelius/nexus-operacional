@@ -227,7 +227,7 @@ export class ReportsService {
         orderBy: [{ date: "asc" }, { createdAt: "asc" }]
       }),
       this.prisma.productivityEntry.findMany({
-        where: { date: dateFilter, weekId },
+        where: { deletedAt: null, workflowStatus: "APPROVED", date: dateFilter, weekId },
         include: { equipment: true, shift: true },
         orderBy: [{ date: "asc" }, { createdAt: "asc" }]
       })
@@ -288,7 +288,8 @@ export class ReportsService {
       shift: row.shift?.name ?? "",
       producedKg: Number(row.producedKg),
       productiveHours: Number(row.productiveHours),
-      kgPerHour: Number(row.kgPerHour)
+      kgPerHour: Number(row.kgPerHour),
+      source: row.dataSource
     }));
 
     const sum = (values: Array<Prisma.Decimal | number>) => values.reduce<Prisma.Decimal>((total, value) => total.plus(value), new Prisma.Decimal(0));

@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Post, Res } from "@nestjs/common";
 import { Throttle } from "@nestjs/throttler";
 import { Response } from "express";
+import { resolveAuthCookieSameSite } from "../../config/production-secrets";
 import { CurrentUser } from "../../infrastructure/security/current-user";
 import { CurrentUserData } from "./current-user.decorator";
 import { AuthService } from "./auth.service";
@@ -10,10 +11,10 @@ const sessionCookieName = "nexus_session";
 
 function sessionCookieOptions() {
   const maxAge = Number(process.env.JWT_ACCESS_COOKIE_MAX_AGE_MS ?? 15 * 60 * 1000);
-  const sameSite = (process.env.AUTH_COOKIE_SAMESITE ?? "lax") as "lax" | "strict" | "none";
+  const sameSite = resolveAuthCookieSameSite(process.env);
   return {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production" || sameSite === "none",
+    secure: process.env.NODE_ENV === "production",
     sameSite,
     path: "/",
     maxAge

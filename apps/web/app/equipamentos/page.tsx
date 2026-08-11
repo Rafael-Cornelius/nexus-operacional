@@ -14,6 +14,7 @@ interface ProductionLineRow {
   id: string;
   code: string;
   name: string;
+  active?: boolean;
   sector?: { code: string; name?: string };
 }
 
@@ -42,6 +43,7 @@ export default function EquipmentPage() {
   const canManage = canManageEquipment(roles);
   const canDeactivate = canDeactivateReference(roles);
   const [equipment, setEquipment] = useState<EquipmentRow[]>([]);
+  const [productionLines, setProductionLines] = useState<ProductionLineRow[]>([]);
   const [form, setForm] = useState<EquipmentForm>(emptyForm);
   const [editingId, setEditingId] = useState("");
   const [search, setSearch] = useState("");
@@ -49,9 +51,12 @@ export default function EquipmentPage() {
   const [loading, setLoading] = useState(false);
 
   const knownLines = useMemo(() => {
-    const lines = equipment.flatMap((row) => row.productionLine ? [row.productionLine] : []);
+    const lines = [
+      ...productionLines,
+      ...equipment.flatMap((row) => row.productionLine ? [row.productionLine] : [])
+    ];
     return Array.from(new Map(lines.map((line) => [line.id, line])).values());
-  }, [equipment]);
+  }, [equipment, productionLines]);
 
   const visibleEquipment = useMemo(() => {
     const term = search.trim().toLocaleLowerCase("pt-BR");
@@ -62,22 +67,30 @@ export default function EquipmentPage() {
 
   async function loadEquipment() {
     if (DEMO_MODE) {
-      setEquipment(createDemoEquipmentRows());
+      const rows = createDemoEquipmentRows();
+      setEquipment(rows);
+      setProductionLines(Array.from(new Map(rows.map((row) => [row.productionLine.id, row.productionLine])).values()));
       setMessage("Preview isolado: equipamentos demonstrativos carregados localmente.");
       return;
     }
     if (!session) {
       setEquipment([]);
+      setProductionLines([]);
       setMessage("Entre no sistema para consultar os equipamentos.");
       return;
     }
     setLoading(true);
     try {
-      const rows = await apiGetClient<EquipmentRow[]>("/equipment");
+      const [rows, lines] = await Promise.all([
+        apiGetClient<EquipmentRow[]>("/equipment"),
+        apiGetClient<ProductionLineRow[]>("/reference-data/lines?active=true")
+      ]);
       setEquipment(rows);
-      setMessage(`${rows.length} equipamento(s) carregado(s) da API.`);
+      setProductionLines(lines);
+      setMessage(`${rows.length} equipamento(s) e ${lines.length} linha(s) ativa(s) carregados da API.`);
     } catch (error) {
       setEquipment([]);
+      setProductionLines([]);
       setMessage(error instanceof Error ? error.message : "Não foi possível carregar os equipamentos.");
     } finally {
       setLoading(false);
@@ -105,7 +118,7 @@ export default function EquipmentPage() {
       return;
     }
     if (!isUuid(form.productionLineId)) {
-      setMessage("Informe um UUID válido de uma linha de produção já cadastrada.");
+      setMessage("Selecione uma linha de produção ativa já cadastrada.");
       return;
     }
     if (!form.code.trim() || form.name.trim().length < 2) {
@@ -182,14 +195,11 @@ export default function EquipmentPage() {
           <div>
             <h3 className="font-semibold">{editingId ? "Editar equipamento" : "Novo equipamento"}</h3>
             <p className="mt-1 text-sm text-slate-400">
-              A API ainda não expõe um catálogo independente de linhas. Informe o UUID real da linha; as sugestões abaixo vêm apenas dos equipamentos já carregados.
+              Selecione uma linha ativa do catálogo operacional. Cadastre setores e linhas primeiro em Cadastros-base.
             </p>
           </div>
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <TextField label="UUID da linha" value={form.productionLineId} onChange={(value) => setForm((current) => ({ ...current, productionLineId: value }))} list="known-production-lines" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" />
-            <datalist id="known-production-lines">
-              {knownLines.map((line) => <option key={line.id} value={line.id}>{line.sector?.code ?? "-"} · {line.code} · {line.name}</option>)}
-            </datalist>
+            <LineSelect lines={knownLines} value={form.productionLineId} onChange={(value) => setForm((current) => ({ ...current, productionLineId: value }))} />
             <TextField label="Código" value={form.code} onChange={(value) => setForm((current) => ({ ...current, code: value }))} placeholder="Ex.: EMB-P1" />
             <TextField label="Nome" value={form.name} onChange={(value) => setForm((current) => ({ ...current, name: value }))} placeholder="Nome do equipamento" />
             <TextField label="Tipo" value={form.type} onChange={(value) => setForm((current) => ({ ...current, type: value }))} placeholder="Embaladora, dosador..." />
@@ -235,6 +245,10 @@ export default function EquipmentPage() {
   );
 }
 
-function TextField({ label, value, onChange, placeholder, list }: { label: string; value: string; onChange: (value: string) => void; placeholder?: string; list?: string }) {
-  return <label className="space-y-2"><span className="text-xs uppercase text-slate-400">{label}</span><input className="w-full rounded-md border border-[var(--line)] bg-white/5 px-3 py-2 text-sm outline-none focus:border-cyan-300/60" value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} list={list} /></label>;
+function LineSelect({ lines, value, onChange }: { lines: ProductionLineRow[]; value: string; onChange: (value: string) => void }) {
+  return <label className="space-y-2"><span className="text-xs uppercase text-slate-400">Linha de produção</span><select className="w-full rounded-md border border-[var(--line)] bg-[var(--panel)] px-3 py-2 text-sm outline-none focus:border-cyan-300/60" value={value} onChange={(event) => onChange(event.target.value)}><option value="">{lines.length ? "Selecione a linha" : "Cadastre uma linha primeiro"}</option>{lines.map((line) => <option key={line.id} value={line.id}>{line.sector?.code ?? "-"} · {line.code} · {line.name}</option>)}</select></label>;
+}
+
+function TextField({ label, value, onChange, placeholder }: { label: string; value: string; onChange: (value: string) => void; placeholder?: string }) {
+  return <label className="space-y-2"><span className="text-xs uppercase text-slate-400">{label}</span><input className="w-full rounded-md border border-[var(--line)] bg-white/5 px-3 py-2 text-sm outline-none focus:border-cyan-300/60" value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} /></label>;
 }

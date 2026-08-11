@@ -26,6 +26,8 @@ import { DosageModule } from "./modules/dosage/dosage.module";
 import { EquipmentModule } from "./modules/equipment/equipment.module";
 import { ShiftsModule } from "./modules/shifts/shifts.module";
 import { ReconciliationModule } from "./modules/reconciliation/reconciliation.module";
+import { CalculationRulesModule } from "./modules/calculation-rules/calculation-rules.module";
+import { MasterDataModule } from "./modules/master-data/master-data.module";
 import { JwtAuthGuard } from "./modules/auth/jwt-auth.guard";
 import { RolesGuard } from "./modules/auth/roles.guard";
 import { validateProductionEnvironment } from "./config/production-secrets";
@@ -56,7 +58,9 @@ import { validateProductionEnvironment } from "./config/production-secrets";
     DosageModule,
     EquipmentModule,
     ShiftsModule,
-    ReconciliationModule
+    ReconciliationModule,
+    CalculationRulesModule,
+    MasterDataModule
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },

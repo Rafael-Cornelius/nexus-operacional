@@ -50,7 +50,7 @@ describe("calculation rule version persistence", () => {
   it("persists dosage rules actually executed when a check is created", async () => {
     const create = vi.fn().mockImplementation(({ data }) => Promise.resolve({ id: "dosage-1", ...data }));
     const audit = vi.fn().mockResolvedValue(undefined);
-    const service = new DosageService({
+    const transaction = {
       weeklyPeriod: {
         findUnique: vi.fn().mockResolvedValue({
           id: "11111111-1111-4111-8111-111111111111",
@@ -68,6 +68,10 @@ describe("calculation rule version persistence", () => {
         })
       },
       dosageCheck: { create }
+    };
+    const service = new DosageService({
+      ...transaction,
+      $transaction: vi.fn(async (operation: (client: typeof transaction) => Promise<unknown>) => operation(transaction))
     } as never, { record: audit } as never);
 
     await service.create({
@@ -87,6 +91,45 @@ describe("calculation rule version persistence", () => {
         }
       })
     }));
+    expect(audit).toHaveBeenCalledWith(expect.objectContaining({ action: "create" }), transaction);
+  });
+
+  it("rejects dosage creation when transactional audit fails", async () => {
+    const row = { id: "dosage-1" };
+    const transaction = {
+      weeklyPeriod: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "11111111-1111-4111-8111-111111111111",
+          status: "OPEN",
+          startsOn: new Date("2026-05-04T00:00:00.000Z"),
+          endsOn: new Date("2026-05-10T00:00:00.000Z"),
+          deletedAt: null
+        })
+      },
+      product: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "22222222-2222-4222-8222-222222222222",
+          deletedAt: null,
+          weightConfig: { targetPackageWeightG: 1000 }
+        })
+      },
+      dosageCheck: { create: vi.fn().mockResolvedValue(row) }
+    };
+    const prisma = { $transaction: vi.fn(async (operation: (client: typeof transaction) => Promise<unknown>) => operation(transaction)) };
+    const auditError = new Error("audit unavailable");
+    const audit = { record: vi.fn().mockRejectedValue(auditError) };
+    const service = new DosageService(prisma as never, audit as never);
+
+    await expect(service.create({
+      weekId: "11111111-1111-4111-8111-111111111111",
+      productId: "22222222-2222-4222-8222-222222222222",
+      sector: "P1",
+      date: "2026-05-05",
+      sampleWeightsG: [990, 1000, 1010]
+    })).rejects.toBe(auditError);
+    expect(transaction.dosageCheck.create).toHaveBeenCalledOnce();
+    expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({ action: "create", after: row }), transaction);
+    expect(prisma.$transaction).toHaveBeenCalledOnce();
   });
 
   it("wires snapshots into operational writes and reviewed import promotion", () => {

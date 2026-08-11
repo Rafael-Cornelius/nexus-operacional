@@ -2,18 +2,41 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { RefreshCw, Save } from "lucide-react";
+import { TraceabilityFields } from "@/components/forms/traceability-fields";
 import { PageHeader } from "@/components/layout/page-header";
 import { DataTable } from "@/components/tables/data-table";
 import { Button } from "@/components/ui/button";
 import { Card, StatCard } from "@/components/ui/card";
 import { EntryWorkflowActions } from "@/components/workflow/entry-workflow-actions";
+import {
+  createDemoEquipmentRows,
+  createDemoShiftRows,
+} from "@/lib/demo/admin-reference-preview";
 import { demoDashboardAlerts } from "@/lib/demo/operational-preview";
-import { createDemoDowntimeEntries, demoWorkflowDowntimeReasons, demoWorkflowWeek } from "@/lib/demo/workflow-preview";
+import {
+  createDemoDowntimeEntries,
+  demoWorkflowDowntimeReasons,
+  demoWorkflowWeek,
+} from "@/lib/demo/workflow-preview";
 import { formatKg, formatPercent } from "@/lib/format";
-import { goalVisualState, type OperationalGoalAlert } from "@/lib/operational-goals";
+import { operationalDateInputValue } from "@/lib/operational-date";
+import {
+  goalVisualState,
+  type OperationalGoalAlert,
+} from "@/lib/operational-goals";
 import type { WorkflowEntry } from "@/lib/operational-workflow";
+import {
+  traceabilityPayload,
+  type EquipmentReference,
+  type ShiftReference,
+} from "@/lib/operational-traceability";
 import { resolveExplicitWeekId } from "@/lib/week-selection";
-import { apiGetClient, apiPostClient, DEMO_MODE, getSession } from "@/services/api";
+import {
+  apiGetClient,
+  apiPostClient,
+  DEMO_MODE,
+  getSession,
+} from "@/services/api";
 
 interface WeekRow {
   id: string;
@@ -35,6 +58,9 @@ interface DowntimeEntryRow extends WorkflowEntry {
   possibleKgHour: string | number;
   status: string;
   sector?: { code: string };
+  line?: { code: string; name: string } | null;
+  equipment?: { code: string; name: string } | null;
+  shift?: { code: string; name: string } | null;
   reason?: { name: string };
 }
 
@@ -45,12 +71,17 @@ function at(date: string, time: string) {
 export default function DowntimePage() {
   const [weeks, setWeeks] = useState<WeekRow[]>([]);
   const [reasons, setReasons] = useState<ReasonRow[]>([]);
+  const [equipment, setEquipment] = useState<EquipmentReference[]>([]);
+  const [shifts, setShifts] = useState<ShiftReference[]>([]);
   const [entries, setEntries] = useState<DowntimeEntryRow[]>([]);
   const [alerts, setAlerts] = useState<OperationalGoalAlert[]>([]);
   const [weekId, setWeekId] = useState("");
   const [reasonId, setReasonId] = useState("");
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(operationalDateInputValue());
   const [sector, setSector] = useState<"P1" | "P2">("P1");
+  const [lineId, setLineId] = useState("");
+  const [equipmentId, setEquipmentId] = useState("");
+  const [shiftId, setShiftId] = useState("");
   const [productionStart, setProductionStart] = useState("08:00");
   const [productionEnd, setProductionEnd] = useState("16:00");
   const [downtimeStart, setDowntimeStart] = useState("10:00");
@@ -71,26 +102,43 @@ export default function DowntimePage() {
       if (DEMO_MODE) {
         setWeeks([demoWorkflowWeek]);
         setReasons(demoWorkflowDowntimeReasons);
+        setEquipment(createDemoEquipmentRows());
+        setShifts(createDemoShiftRows());
         setWeekId(demoWorkflowWeek.id);
-        setReasonId((current) => current || demoWorkflowDowntimeReasons[0]?.id || "");
-        setEntries((current) => current.length ? current : createDemoDowntimeEntries());
+        setReasonId(
+          (current) => current || demoWorkflowDowntimeReasons[0]?.id || "",
+        );
+        setEntries((current) =>
+          current.length ? current : createDemoDowntimeEntries(),
+        );
         setAlerts(demoDashboardAlerts);
-        setMessage("Paradas demonstrativas carregadas; o workflow funciona localmente.");
+        setMessage(
+          "Paradas demonstrativas carregadas; o workflow funciona localmente.",
+        );
         return;
       }
-      const [weekRows, reasonRows] = await Promise.all([
-        apiGetClient<WeekRow[]>("/weeks"),
-        apiGetClient<ReasonRow[]>("/downtime/reasons")
-      ]);
+      const [weekRows, reasonRows, equipmentRows, shiftRows] =
+        await Promise.all([
+          apiGetClient<WeekRow[]>("/weeks"),
+          apiGetClient<ReasonRow[]>("/downtime/reasons"),
+          apiGetClient<EquipmentReference[]>("/equipment?active=true"),
+          apiGetClient<ShiftReference[]>("/shifts?active=true"),
+        ]);
       const selectedWeek = resolveExplicitWeekId(weekRows, requestedWeek);
       setWeeks(weekRows);
       setReasons(reasonRows);
+      setEquipment(equipmentRows);
+      setShifts(shiftRows);
       setWeekId(selectedWeek);
       setReasonId((current) => current || reasonRows[0]?.id || "");
       if (selectedWeek) {
         const [rows, nextAlerts] = await Promise.all([
-          apiGetClient<DowntimeEntryRow[]>(`/downtime?weekId=${encodeURIComponent(selectedWeek)}`),
-          apiGetClient<OperationalGoalAlert[]>(`/dashboard/alerts?weekId=${encodeURIComponent(selectedWeek)}`)
+          apiGetClient<DowntimeEntryRow[]>(
+            `/downtime?weekId=${encodeURIComponent(selectedWeek)}`,
+          ),
+          apiGetClient<OperationalGoalAlert[]>(
+            `/dashboard/alerts?weekId=${encodeURIComponent(selectedWeek)}`,
+          ),
         ]);
         setEntries(rows);
         setAlerts(nextAlerts);
@@ -98,14 +146,24 @@ export default function DowntimePage() {
       } else {
         setEntries([]);
         setAlerts([]);
-        setMessage(weekRows.length ? "Selecione uma semana para carregar as paradas." : "Nenhuma semana operacional cadastrada.");
+        setMessage(
+          weekRows.length
+            ? "Selecione uma semana para carregar as paradas."
+            : "Nenhuma semana operacional cadastrada.",
+        );
       }
     } catch (error) {
       setWeeks([]);
       setReasons([]);
+      setEquipment([]);
+      setShifts([]);
       setEntries([]);
       setAlerts([]);
-      setMessage(error instanceof Error ? error.message : "Nao foi possivel carregar paradas da API.");
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Nao foi possivel carregar paradas da API.",
+      );
     } finally {
       setLoading(false);
     }
@@ -120,61 +178,116 @@ export default function DowntimePage() {
       setMessage("Entre no sistema e selecione semana/motivo para salvar.");
       return;
     }
+    if (!lineId && !equipmentId) {
+      setMessage(
+        "Selecione uma linha de produção ou um equipamento para rastrear a parada.",
+      );
+      return;
+    }
     if (DEMO_MODE) {
-      const productionMinutes = Math.max((new Date(at(date, productionEnd)).getTime() - new Date(at(date, productionStart)).getTime()) / 60_000, 1);
-      const stoppedMinutes = Math.max((new Date(at(date, downtimeEnd)).getTime() - new Date(at(date, downtimeStart)).getTime()) / 60_000, 0);
+      const productionMinutes = Math.max(
+        (new Date(at(date, productionEnd)).getTime() -
+          new Date(at(date, productionStart)).getTime()) /
+          60_000,
+        1,
+      );
+      const stoppedMinutes = Math.max(
+        (new Date(at(date, downtimeEnd)).getTime() -
+          new Date(at(date, downtimeStart)).getTime()) /
+          60_000,
+        0,
+      );
       const selectedReason = reasons.find((reason) => reason.id === reasonId);
+      const selectedEquipment = equipment.find(
+        (item) => item.id === equipmentId,
+      );
+      const selectedLine =
+        selectedEquipment?.productionLine ??
+        equipment.find((item) => item.productionLineId === lineId)
+          ?.productionLine;
+      const selectedShift = shifts.find((item) => item.id === shiftId);
       const demoEntry: DowntimeEntryRow = {
         id: `demo-downtime-${Date.now()}`,
         date: `${date}T00:00:00.000Z`,
         stoppedMinutes,
         stoppedPercent: stoppedMinutes / productionMinutes,
         realKgHour: producedMassKg / (productionMinutes / 60),
-        possibleKgHour: producedMassKg / (Math.max(productionMinutes - stoppedMinutes, 1) / 60),
+        possibleKgHour:
+          producedMassKg /
+          (Math.max(productionMinutes - stoppedMinutes, 1) / 60),
         status: stoppedMinutes / productionMinutes > 0.05 ? "ATTENTION" : "OK",
         sector: { code: sector },
+        line: selectedLine
+          ? { code: selectedLine.code, name: selectedLine.name }
+          : null,
+        equipment: selectedEquipment
+          ? { code: selectedEquipment.code, name: selectedEquipment.name }
+          : null,
+        shift: selectedShift
+          ? { code: selectedShift.code, name: selectedShift.name }
+          : null,
         reason: selectedReason,
         workflowStatus: "DRAFT",
-        version: 1
+        version: 1,
       };
       setEntries((current) => [demoEntry, ...current]);
-      setMessage("Rascunho de parada criado localmente. Use Enviar para iniciar a aprovação demonstrativa.");
+      setMessage(
+        "Rascunho de parada criado localmente. Use Enviar para iniciar a aprovação demonstrativa.",
+      );
       return;
     }
     setLoading(true);
     try {
-      await apiPostClient(
-        "/downtime",
-        {
-          weekId,
-          date,
-          sector,
-          productionStart: at(date, productionStart),
-          productionEnd: at(date, productionEnd),
-          downtimeStart: at(date, downtimeStart),
-          downtimeEnd: at(date, downtimeEnd),
-          producedMassKg,
-          downtimeReasonId: reasonId,
-          notes: "Parada registrada pela tela operacional."
-        }
-      );
+      await apiPostClient("/downtime", {
+        weekId,
+        date,
+        sector,
+        ...traceabilityPayload({ lineId, equipmentId, shiftId }),
+        productionStart: at(date, productionStart),
+        productionEnd: at(date, productionEnd),
+        downtimeStart: at(date, downtimeStart),
+        downtimeEnd: at(date, downtimeEnd),
+        producedMassKg,
+        downtimeReasonId: reasonId,
+        notes: "Parada registrada pela tela operacional.",
+      });
       await loadData(weekId);
       setMessage("Parada registrada e classificada pelo backend.");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Falha ao salvar parada.");
+      setMessage(
+        error instanceof Error ? error.message : "Falha ao salvar parada.",
+      );
     } finally {
       setLoading(false);
     }
   }
 
-  const stoppedTotal = entries.reduce((sum, entry) => sum + Number(entry.stoppedMinutes), 0);
-  const averageRealKgHour = entries.length ? entries.reduce((sum, entry) => sum + Number(entry.realKgHour), 0) / entries.length : 0;
-  const averagePingandoKgHour = entries.length ? entries.reduce((sum, entry) => sum + Number(entry.possibleKgHour), 0) / entries.length : 0;
-  const downtimeGoal = goalVisualState(alerts, ["downtime_minutes"], (target) => `${target.toLocaleString("pt-BR")} min`);
+  const stoppedTotal = entries.reduce(
+    (sum, entry) => sum + Number(entry.stoppedMinutes),
+    0,
+  );
+  const averageRealKgHour = entries.length
+    ? entries.reduce((sum, entry) => sum + Number(entry.realKgHour), 0) /
+      entries.length
+    : 0;
+  const averagePingandoKgHour = entries.length
+    ? entries.reduce((sum, entry) => sum + Number(entry.possibleKgHour), 0) /
+      entries.length
+    : 0;
+  const downtimeGoal = goalVisualState(
+    alerts,
+    ["downtime_minutes"],
+    (target) => `${target.toLocaleString("pt-BR")} min`,
+  );
   const rows = entries.length
     ? entries.map((entry) => ({
         Data: entry.date.slice(0, 10),
         Setor: entry.sector?.code ?? "-",
+        Linha: entry.line ? `${entry.line.code} - ${entry.line.name}` : "-",
+        Equipamento: entry.equipment
+          ? `${entry.equipment.code} - ${entry.equipment.name}`
+          : "-",
+        Turno: entry.shift ? `${entry.shift.code} - ${entry.shift.name}` : "-",
         Motivo: entry.reason?.name ?? "-",
         Tempo: `${Number(entry.stoppedMinutes).toLocaleString("pt-BR")} min`,
         "% parada": formatPercent(Number(entry.stoppedPercent)),
@@ -190,37 +303,131 @@ export default function DowntimePage() {
             demo={DEMO_MODE}
             disabled={loading}
             onChanged={async (updated) => {
-              if (DEMO_MODE) setEntries((current) => current.map((item) => item.id === updated.id ? updated : item));
+              if (DEMO_MODE)
+                setEntries((current) =>
+                  current.map((item) =>
+                    item.id === updated.id ? updated : item,
+                  ),
+                );
               else await loadData(weekId);
             }}
             onReload={() => loadData(weekId)}
             onMessage={setMessage}
           />
-        )
+        ),
       }))
-    : [{ Data: "-", Setor: "-", Motivo: "Nenhuma parada carregada.", Tempo: "-", "% parada": "-", "kg/h real": "-", "kg/h pingando": "-", Status: "-", Fluxo: <span>-</span> }];
+    : [
+        {
+          Data: "-",
+          Setor: "-",
+          Linha: "-",
+          Equipamento: "-",
+          Turno: "-",
+          Motivo: "Nenhuma parada carregada.",
+          Tempo: "-",
+          "% parada": "-",
+          "kg/h real": "-",
+          "kg/h pingando": "-",
+          Status: "-",
+          Fluxo: <span>-</span>,
+        },
+      ];
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Controle de paradas" description="Controle de inicio, termino, motivo, tempo parado, eficiencia e impacto produtivo." />
+      <PageHeader
+        title="Controle de paradas"
+        description="Controle de inicio, termino, motivo, tempo parado, eficiencia e impacto produtivo."
+      />
       <Card>
         <div className="grid gap-4 md:grid-cols-4">
-          <Select label="Semana" value={weekId} onChange={(value) => { setWeekId(value); void loadData(value); }} options={weeks.map((week) => ({ value: week.id, label: `${week.label} - ${week.status}` }))} />
-          <Select label="Motivo" value={reasonId} onChange={setReasonId} options={reasons.map((reason) => ({ value: reason.id, label: reason.name }))} />
-          <Select label="Setor" value={sector} onChange={(value) => setSector(value as "P1" | "P2")} options={[{ value: "P1", label: "P1" }, { value: "P2", label: "P2" }]} />
+          <Select
+            label="Semana"
+            value={weekId}
+            onChange={(value) => {
+              setWeekId(value);
+              void loadData(value);
+            }}
+            options={weeks.map((week) => ({
+              value: week.id,
+              label: `${week.label} - ${week.status}`,
+            }))}
+          />
+          <Select
+            label="Motivo"
+            value={reasonId}
+            onChange={setReasonId}
+            options={reasons.map((reason) => ({
+              value: reason.id,
+              label: reason.name,
+            }))}
+          />
+          <Select
+            label="Setor"
+            value={sector}
+            onChange={(value) => {
+              setSector(value as "P1" | "P2");
+              setLineId("");
+              setEquipmentId("");
+            }}
+            options={[
+              { value: "P1", label: "P1" },
+              { value: "P2", label: "P2" },
+            ]}
+          />
           <Input label="Data" type="date" value={date} onChange={setDate} />
-          <Input label="Inicio producao" type="time" value={productionStart} onChange={setProductionStart} />
-          <Input label="Fim producao" type="time" value={productionEnd} onChange={setProductionEnd} />
-          <Input label="Inicio parada" type="time" value={downtimeStart} onChange={setDowntimeStart} />
-          <Input label="Fim parada" type="time" value={downtimeEnd} onChange={setDowntimeEnd} />
+          <TraceabilityFields
+            sector={sector}
+            equipment={equipment}
+            shifts={shifts}
+            lineId={lineId}
+            equipmentId={equipmentId}
+            shiftId={shiftId}
+            onLineChange={setLineId}
+            onEquipmentChange={setEquipmentId}
+            onShiftChange={setShiftId}
+          />
+          <Input
+            label="Inicio producao"
+            type="time"
+            value={productionStart}
+            onChange={setProductionStart}
+          />
+          <Input
+            label="Fim producao"
+            type="time"
+            value={productionEnd}
+            onChange={setProductionEnd}
+          />
+          <Input
+            label="Inicio parada"
+            type="time"
+            value={downtimeStart}
+            onChange={setDowntimeStart}
+          />
+          <Input
+            label="Fim parada"
+            type="time"
+            value={downtimeEnd}
+            onChange={setDowntimeEnd}
+          />
         </div>
         <div className="mt-4 flex flex-wrap gap-3">
-          <NumberInput label="Massas produzidas kg" value={producedMassKg} onChange={setProducedMassKg} />
+          <NumberInput
+            label="Massas produzidas kg"
+            value={producedMassKg}
+            onChange={setProducedMassKg}
+          />
           <Button type="button" onClick={saveDowntime} disabled={loading}>
             <Save className="size-4" />
             Salvar parada
           </Button>
-          <Button type="button" className="border-slate-400/30 bg-white/5" onClick={() => loadData(weekId)} disabled={loading}>
+          <Button
+            type="button"
+            className="border-slate-400/30 bg-white/5"
+            onClick={() => loadData(weekId)}
+            disabled={loading}
+          >
             <RefreshCw className="size-4" />
             Atualizar
           </Button>
@@ -228,43 +435,102 @@ export default function DowntimePage() {
         <p className="mt-4 text-sm text-slate-300">{message}</p>
       </Card>
       <div className="grid gap-4 md:grid-cols-4">
-        <StatCard label="Tempo parado" value={`${stoppedTotal.toLocaleString("pt-BR")} min`} hint={downtimeGoal.hint} status={downtimeGoal.status} />
+        <StatCard
+          label="Tempo parado"
+          value={`${stoppedTotal.toLocaleString("pt-BR")} min`}
+          hint={downtimeGoal.hint}
+          status={downtimeGoal.status}
+        />
         <StatCard label="Registros" value={String(entries.length)} />
         <StatCard label="kg/h real médio" value={formatKg(averageRealKgHour)} />
-        <StatCard label="kg/h pingando médio" value={formatKg(averagePingandoKgHour)} />
-        <StatCard label="Status operacional" value={downtimeGoal.status ?? "Sem meta"} hint={downtimeGoal.hint} status={downtimeGoal.status} />
+        <StatCard
+          label="kg/h pingando médio"
+          value={formatKg(averagePingandoKgHour)}
+        />
+        <StatCard
+          label="Status operacional"
+          value={downtimeGoal.status ?? "Sem meta"}
+          hint={downtimeGoal.hint}
+          status={downtimeGoal.status}
+        />
       </div>
       <DataTable title="Paradas" rows={rows} />
     </div>
   );
 }
 
-function Select({ label, value, onChange, options }: { label: string; value: string; onChange: (value: string) => void; options: Array<{ value: string; label: string }> }) {
+function Select({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: Array<{ value: string; label: string }>;
+}) {
   return (
     <label className="space-y-2">
       <span className="text-xs uppercase text-slate-400">{label}</span>
-      <select className="w-full rounded-md border border-[var(--line)] bg-[#07101d] px-3 py-2 text-sm outline-none focus:border-cyan-300/60" value={value} onChange={(event) => onChange(event.target.value)}>
+      <select
+        className="w-full rounded-md border border-[var(--line)] bg-[#07101d] px-3 py-2 text-sm outline-none focus:border-cyan-300/60"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      >
         <option value="">Selecione</option>
-        {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
       </select>
     </label>
   );
 }
 
-function Input({ label, value, onChange, type = "text" }: { label: string; value: string; onChange: (value: string) => void; type?: string }) {
+function Input({
+  label,
+  value,
+  onChange,
+  type = "text",
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  type?: string;
+}) {
   return (
     <label className="space-y-2">
       <span className="text-xs uppercase text-slate-400">{label}</span>
-      <input type={type} className="w-full rounded-md border border-[var(--line)] bg-white/5 px-3 py-2 text-sm outline-none focus:border-cyan-300/60" value={value} onChange={(event) => onChange(event.target.value)} />
+      <input
+        type={type}
+        className="w-full rounded-md border border-[var(--line)] bg-white/5 px-3 py-2 text-sm outline-none focus:border-cyan-300/60"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
     </label>
   );
 }
 
-function NumberInput({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
+function NumberInput({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  onChange: (value: number) => void;
+}) {
   return (
     <label className="min-w-56 space-y-2">
       <span className="text-xs uppercase text-slate-400">{label}</span>
-      <input type="number" className="w-full rounded-md border border-[var(--line)] bg-white/5 px-3 py-2 text-sm outline-none focus:border-cyan-300/60" value={value} onChange={(event) => onChange(Number(event.target.value))} />
+      <input
+        type="number"
+        className="w-full rounded-md border border-[var(--line)] bg-white/5 px-3 py-2 text-sm outline-none focus:border-cyan-300/60"
+        value={value}
+        onChange={(event) => onChange(Number(event.target.value))}
+      />
     </label>
   );
 }

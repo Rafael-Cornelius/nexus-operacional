@@ -12,7 +12,7 @@ test("manages equipment and shifts with isolated preview data", async ({ page })
   await page.goto("/equipamentos");
   await expect(page.getByRole("heading", { name: "Equipamentos", exact: true })).toBeVisible();
   await expect(page.getByText("equipamentos demonstrativos carregados localmente")).toBeVisible();
-  await page.getByLabel("UUID da linha").fill("11111111-1111-4111-8111-111111111111");
+  await page.getByLabel("Linha de produção").selectOption("11111111-1111-4111-8111-111111111111");
   await page.getByLabel("Código").fill("EQ-TESTE");
   await page.getByLabel("Nome").fill("Equipamento de teste");
   await page.getByLabel("Tipo").fill("Teste");

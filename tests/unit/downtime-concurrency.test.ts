@@ -2,6 +2,7 @@ import { ConflictException } from "@nestjs/common";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { CALCULATION_RULE_IDS } from "../../apps/api/src/domain/calculations/rule-registry";
 import {
   DowntimeService,
   downtimeOverlapConstraint
@@ -200,6 +201,9 @@ describe("downtime overlap concurrency", () => {
       lineId: ids.line,
       equipmentId: null,
       submittedBy: ids.submitter,
+      calculationRuleVersions: {
+        [CALCULATION_RULE_IDS.downtimeStatus]: 1
+      },
       week
     };
     const changed = { ...current, version: 2 };
@@ -209,6 +213,11 @@ describe("downtime overlap concurrency", () => {
         findUnique: vi.fn().mockResolvedValue(current),
         findFirst: vi.fn().mockResolvedValue(null),
         update: vi.fn().mockResolvedValue(changed)
+      },
+      calculationRuleApproval: {
+        findMany: vi.fn().mockResolvedValue([
+          { ruleId: CALCULATION_RULE_IDS.downtimeStatus, ruleVersion: 1 }
+        ])
       }
     };
     const $transaction = vi.fn((operation: (client: typeof transaction) => unknown) => operation(transaction));
@@ -220,7 +229,7 @@ describe("downtime overlap concurrency", () => {
     const actor = { id: ids.actor, email: "supervisor@nexus.local", roles: ["SUPERVISOR"] };
 
     await expect(service[method](ids.entry, command, actor)).resolves.toEqual(changed);
-    expect(transaction.$queryRaw).toHaveBeenCalledOnce();
+    expect(transaction.$queryRaw).toHaveBeenCalledTimes(method === "approve" ? 2 : 1);
     expect(transaction.downtimeEntry.update).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: ids.entry, version: 1 } })
     );

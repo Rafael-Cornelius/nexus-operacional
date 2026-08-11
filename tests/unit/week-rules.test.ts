@@ -100,6 +100,8 @@ describe("operational week rules", () => {
       productionEntry: { count: vi.fn().mockResolvedValue(2) },
       lossEntry: { count: vi.fn().mockResolvedValue(1) },
       downtimeEntry: { count: vi.fn().mockResolvedValue(0) },
+      dosageCheck: { count: vi.fn().mockResolvedValue(0) },
+      productivityEntry: { count: vi.fn().mockResolvedValue(0) },
       dashboardSnapshot: { create: vi.fn() }
     };
     const prisma = withTransaction(transaction);

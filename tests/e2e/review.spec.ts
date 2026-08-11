@@ -7,17 +7,26 @@ const reviewRoutes = [
   { slug: "login", path: "/login" },
   { slug: "dashboard", path: "/dashboard" },
   { slug: "importacao", path: "/importacao" },
+  { slug: "cadastros-base", path: "/cadastros-base" },
   { slug: "produtos", path: "/produtos" },
   { slug: "equipamentos", path: "/equipamentos" },
   { slug: "turnos", path: "/turnos" },
   { slug: "semanas", path: "/semanas" },
+  { slug: "metas", path: "/metas" },
   { slug: "producao-p1", path: "/producao/p1" },
+  { slug: "producao-p2", path: "/producao/p2" },
   { slug: "perdas", path: "/perdas" },
   { slug: "paradas", path: "/paradas" },
+  { slug: "dosagem", path: "/dosagem" },
+  { slug: "produtividade", path: "/produtividade" },
+  { slug: "sobrepeso", path: "/sobrepeso" },
   { slug: "historico", path: "/historico" },
   { slug: "relatorios", path: "/relatorios" },
   { slug: "apresentacoes", path: "/apresentacoes" },
-  { slug: "backups", path: "/backups" }
+  { slug: "backups", path: "/backups" },
+  { slug: "usuarios", path: "/usuarios" },
+  { slug: "auditoria", path: "/auditoria" },
+  { slug: "configuracoes", path: "/configuracoes" }
 ];
 
 for (const route of reviewRoutes) {

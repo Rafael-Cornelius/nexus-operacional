@@ -9,7 +9,10 @@ export function calculateAverageKgPerDay(producedKg: number, workedDays: number)
   return round(safeDivide(producedKg, workedDays), 3);
 }
 
-export const PRODUCTIVITY_CALCULATION_RULE_VERSIONS = calculationRuleVersions(
-  CALCULATION_RULE_IDS.productivityKgHour,
+export const PRODUCTIVITY_ENTRY_CALCULATION_RULE_VERSIONS = calculationRuleVersions(
+  CALCULATION_RULE_IDS.productivityKgHour
+);
+
+export const PRODUCTIVITY_SUMMARY_CALCULATION_RULE_VERSIONS = calculationRuleVersions(
   CALCULATION_RULE_IDS.productivityKgDay
 );

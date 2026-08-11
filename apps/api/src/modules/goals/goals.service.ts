@@ -357,6 +357,11 @@ export class GoalsService {
         if (!current.startsOn || !current.measurementUnit || !current.responsibleId || !current.scopeKey) {
           throw new BadRequestException("Meta incompleta. Crie nova versão com vigência, unidade, escopo e responsável.");
         }
+        if (current.createdBy === actorId || current.responsibleId === actorId) {
+          throw new ForbiddenException(
+            "A meta deve ser aprovada por outro gestor, diferente de quem criou e de quem é responsável por ela."
+          );
+        }
         await this.assertReferences(transaction, current as GoalRecord & GoalScope);
         await this.assertNoApprovedOverlap(transaction, current);
 

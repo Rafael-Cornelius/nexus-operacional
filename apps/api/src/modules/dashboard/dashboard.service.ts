@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from "@nestjs/common";
+import { Injectable, NotFoundException, ServiceUnavailableException } from "@nestjs/common";
 import { PrismaService } from "../../infrastructure/database/prisma.service";
 import { GoalsService } from "../goals/goals.service";
 import { calculateDashboardFinancials } from "../../domain/calculations/financial-calculations";
@@ -212,13 +212,24 @@ export class DashboardService {
     return Object.values(CALCULATION_RULES);
   }
 
-  health() {
-    return {
-      status: "ok",
-      service: "nexus-operacional-api",
-      databaseUrlConfigured: Boolean(process.env.DATABASE_URL),
-      timestamp: new Date().toISOString()
-    };
+  async health() {
+    try {
+      if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL ausente");
+      await this.prisma.$queryRaw`SELECT 1`;
+      return {
+        status: "ok",
+        service: "nexus-operacional-api",
+        database: "reachable",
+        timestamp: new Date().toISOString()
+      };
+    } catch {
+      throw new ServiceUnavailableException({
+        status: "unavailable",
+        service: "nexus-operacional-api",
+        database: "unreachable",
+        timestamp: new Date().toISOString()
+      });
+    }
   }
 
   async dbHealth() {

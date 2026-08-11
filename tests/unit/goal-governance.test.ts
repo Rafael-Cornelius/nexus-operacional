@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { BadRequestException, ConflictException } from "@nestjs/common";
+import { BadRequestException, ConflictException, ForbiddenException } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { describe, expect, it, vi } from "vitest";
 import { GoalsService } from "../../apps/api/src/modules/goals/goals.service";
@@ -13,6 +13,7 @@ const actor = {
   roles: ["MANAGER"]
 };
 const responsibleId = "22222222-2222-4222-8222-222222222222";
+const creatorId = "77777777-7777-4777-8777-777777777777";
 
 function goal(overrides: Record<string, unknown> = {}) {
   return {
@@ -45,7 +46,7 @@ function goal(overrides: Record<string, unknown> = {}) {
     versionReason: "Definição inicial validada pela gestão.",
     legacyDueDate: null,
     legacyActive: true,
-    createdBy: actor.id,
+    createdBy: creatorId,
     createdAt: new Date("2026-07-01T00:00:00.000Z"),
     updatedAt: new Date("2026-07-01T00:00:00.000Z"),
     deletedAt: null,
@@ -186,6 +187,31 @@ describe("goal governance", () => {
 
     await expect(service.approve(current.id, { reason: "Aprovação após revisão gerencial completa." }, actor))
       .rejects.toBeInstanceOf(ConflictException);
+    expect(transaction.goal.update).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["criador", { createdBy: actor.id }],
+    ["responsável", { responsibleId: actor.id }]
+  ])("blocks approval by the goal %s", async (_relationship, overrides) => {
+    const current = goal(overrides);
+    const transaction = {
+      ...referenceDelegates(),
+      goal: {
+        findUnique: vi.fn().mockResolvedValue(current),
+        findFirst: vi.fn(),
+        findMany: vi.fn(),
+        update: vi.fn()
+      }
+    };
+    const prisma = {
+      $transaction: vi.fn(async (operation: (client: typeof transaction) => Promise<unknown>) => operation(transaction))
+    };
+    const service = new GoalsService(prisma as never, { record: vi.fn() } as never);
+
+    await expect(service.approve(current.id, { reason: "Aprovação após revisão gerencial completa." }, actor))
+      .rejects.toBeInstanceOf(ForbiddenException);
+    expect(transaction.goal.findFirst).not.toHaveBeenCalled();
     expect(transaction.goal.update).not.toHaveBeenCalled();
   });
 

@@ -16,17 +16,22 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "test:e2e:pages": "playwright test --config=playwright.pages.config.ts",
     "review:screenshots": "playwright test -c playwright.review.config.ts tests/e2e/review.spec.ts",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy",
     "prisma:seed": "tsx prisma/seed.ts",
+    "bootstrap:assert-clean": "tsx scripts/assert_clean_operational_bootstrap.ts",
+    "backup:create:snapshot": "tsx scripts/create_backup_snapshot.ts",
+    "backup:restore:prove": "tsx scripts/prove_backup_restore.ts",
     "import:excel": "python scripts/import_excel.py",
     "clean:excel": "python scripts/clean_excel_data.py",
     "migrate:legacy": "python scripts/migrate_legacy_data.py"
   },
   "dependencies": {
     "@prisma/client": "^6.7.0",
+    "next": "^15.5.21",
     "zod": "^3.24.4"
   },
   "devDependencies": {
@@ -51,6 +56,11 @@
   },
   "overrides": {
     "esbuild": "0.28.1",
+    "next": {
+      ".": "$next",
+      "postcss": "8.5.19",
+      "sharp": "0.35.3"
+    },
     "postcss": "8.5.19",
     "vite": "7.3.6"
   }

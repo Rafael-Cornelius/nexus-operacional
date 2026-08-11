@@ -45,7 +45,8 @@ describe("equipment and shift administration pages", () => {
     expect(equipment).toContain('apiPostClient("/equipment", payload)');
     expect(equipment).toContain("apiPatchClient(`/equipment/${editingId}`, payload)");
     expect(equipment).toContain("apiDeleteClient(`/equipment/${row.id}`)");
-    expect(equipment).toContain("UUID real da linha");
+    expect(equipment).toContain('apiGetClient<ProductionLineRow[]>("/reference-data/lines?active=true")');
+    expect(equipment).toContain("<LineSelect");
     expect(shifts).toContain('apiGetClient<ShiftRow[]>("/shifts")');
     expect(shifts).toContain('apiPostClient("/shifts", payload)');
     expect(shifts).toContain("apiPatchClient(`/shifts/${editingId}`, payload)");

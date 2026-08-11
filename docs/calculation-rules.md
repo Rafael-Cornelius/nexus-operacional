@@ -137,7 +137,7 @@ A migração `0014_calculation_rule_versions` adiciona `calculation_rule_version
 - Alterações apenas de workflow não trocam o snapshot. Edição de valores recalcula, grava novo mapa e mantém o antes/depois no log de auditoria.
 - Linhas existentes recebem `{}` de propósito: atribuir retroativamente versão 1 sem prova de qual código as calculou criaria rastreabilidade falsa.
 
-`ProductivityEntry` agora está preparado no banco, mas o serviço atual não cria nem edita essa entidade: ele agrega produção aprovada diretamente. Um futuro writer deve gravar `PRODUCTIVITY_CALCULATION_RULE_VERSIONS`; até lá, registros legados permanecem `{}`.
+`ProductivityEntry` registra apontamentos informados em fluxo próprio e grava somente a versão de `productivity.kg_per_hour`, regra executada no lançamento. Registros anteriores à governança ficam com origem `LEGACY_UNVERIFIED` e aguardam revisão humana. O resumo automático continua separado: agrega somente produção aprovada e grava na resposta apenas a versão de `productivity.average_kg_per_day`.
 
 `DashboardSnapshot.payload` pode carregar o mapa atual. Fechamento histórico completo ainda depende da política de snapshots do período.
 

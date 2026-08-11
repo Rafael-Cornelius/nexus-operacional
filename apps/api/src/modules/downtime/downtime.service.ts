@@ -5,6 +5,7 @@ import { PrismaService } from "../../infrastructure/database/prisma.service";
 import { downtimeEntrySchema } from "../../domain/validators/schemas";
 import { calculateDowntime } from "../../domain/calculations/downtime-calculations";
 import { AuditService } from "../audit/audit.service";
+import { assertReviewRequiredCalculationRulesApproved } from "../calculation-rules/calculation-rules.service";
 import { CurrentUser } from "../../infrastructure/security/current-user";
 import { assertDateWithinWeek, assertWeekWritable } from "../../domain/weeks/week-rules";
 import {
@@ -368,6 +369,7 @@ export class DowntimeService {
       assertCurrentVersion(current.version, command.version);
       assertWorkflowState(current.workflowStatus, ["SUBMITTED", "UNDER_REVIEW"], "aprovacao");
       assertIndependentApprover(current.submittedBy, userId);
+      await assertReviewRequiredCalculationRulesApproved(transaction, current.calculationRuleVersions);
       const entry = await this.updateWithVersion(transaction, id, command.version, {
         workflowStatus: "APPROVED",
         approvedAt: new Date(),

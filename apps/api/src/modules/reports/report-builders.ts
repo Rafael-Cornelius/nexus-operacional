@@ -60,6 +60,7 @@ export interface ProductivityReportRow {
   producedKg: number;
   productiveHours: number;
   kgPerHour: number;
+  source: "INFORMED_MANUALLY" | "LEGACY_UNVERIFIED";
 }
 
 export interface OperationalReportData {
@@ -141,7 +142,7 @@ export function buildOperationalCsv(data: OperationalReportData) {
     ),
     csvSection(
       "Produtividade",
-      ["data", "setor", "equipamento", "turno", "produzido_kg", "horas_produtivas", "kg_h"],
+      ["data", "setor", "equipamento", "turno", "produzido_kg", "horas_produtivas", "kg_h", "fonte"],
       data.productivity.map((row) => Object.values(row))
     )
   ].join("\r\n\r\n")}`;
@@ -258,7 +259,7 @@ export async function buildOperationalXlsx(data: OperationalReportData) {
     { header: "Data", key: "date", width: 12 }, { header: "Setor", key: "sector", width: 10 },
     { header: "Equipamento", key: "equipment", width: 18 }, { header: "Turno", key: "shift", width: 12 },
     { header: "Produzido kg", key: "producedKg", width: 16 }, { header: "Horas produtivas", key: "productiveHours", width: 18 },
-    { header: "kg/h", key: "kgPerHour", width: 16 }
+    { header: "kg/h", key: "kgPerHour", width: 16 }, { header: "Fonte", key: "source", width: 24 }
   ], data.productivity);
 
   return Buffer.from(await workbook.xlsx.writeBuffer());
@@ -341,6 +342,18 @@ export async function buildOperationalPdf(data: OperationalReportData) {
       ensureSpace(30);
       document.font("Helvetica-Bold").fontSize(8).fillColor("#0F172A").text(`${row.date} | ${row.sector} | ${row.equipment || row.line || "Sem equipamento"} | ${formatNumber(row.stoppedMinutes)} min`);
       document.font("Helvetica").fillColor("#475569").text(row.reason);
+    }
+
+    section("Produtividade informada");
+    if (!data.productivity.length) line("Situacao", "Nenhum apontamento informado aprovado no periodo.");
+    for (const row of data.productivity) {
+      ensureSpace(30);
+      document.font("Helvetica-Bold").fontSize(8).fillColor("#0F172A").text(
+        `${row.date} | ${row.sector} | ${formatNumber(row.kgPerHour, 3)} kg/h | ${row.source}`
+      );
+      document.font("Helvetica").fillColor("#475569").text(
+        `${formatNumber(row.producedKg, 3)} kg informados em ${formatNumber(row.productiveHours, 3)} horas produtivas.`
+      );
     }
 
     const pages = document.bufferedPageRange();

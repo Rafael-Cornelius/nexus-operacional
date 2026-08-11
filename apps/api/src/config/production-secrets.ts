@@ -82,11 +82,67 @@ function databasePassword(databaseUrl: unknown) {
   }
 }
 
+function backupEncryptionKey(rawValue: unknown) {
+  const value = requireStrongProductionSecret(
+    "BACKUP_ENCRYPTION_KEY",
+    rawValue,
+  );
+  const key = /^[0-9a-f]{64}$/i.test(value)
+    ? Buffer.from(value, "hex")
+    : Buffer.from(value, "base64");
+  if (key.length !== 32) {
+    throw new Error(
+      "BACKUP_ENCRYPTION_KEY must contain exactly 32 bytes as base64 or 64 hexadecimal characters in production.",
+    );
+  }
+  return value;
+}
+
+function validateWebOrigin(rawValue: unknown) {
+  const value = optionalString(rawValue)?.trim();
+  if (!value) throw new Error("WEB_ORIGIN must be set in production.");
+  try {
+    const parsed = new URL(value);
+    const loopback = ["localhost", "127.0.0.1", "::1"].includes(
+      parsed.hostname,
+    );
+    if (parsed.protocol !== "https:" && !(loopback && parsed.protocol === "http:")) {
+      throw new Error("insecure protocol");
+    }
+    if (
+      parsed.username ||
+      parsed.password ||
+      parsed.pathname !== "/" ||
+      parsed.search ||
+      parsed.hash
+    ) {
+      throw new Error("origin contains non-origin components");
+    }
+  } catch {
+    throw new Error(
+      "WEB_ORIGIN must be an HTTPS origin without path, query or credentials in production.",
+    );
+  }
+}
+
+export function resolveAuthCookieSameSite(
+  environment: RuntimeEnvironment,
+): "lax" | "strict" {
+  const value = optionalString(environment.AUTH_COOKIE_SAMESITE)?.trim().toLowerCase() || "lax";
+  if (value !== "lax" && value !== "strict") {
+    throw new Error("AUTH_COOKIE_SAMESITE must be lax or strict.");
+  }
+  return value;
+}
+
 export function validateProductionEnvironment(environment: RuntimeEnvironment) {
   if (!isProduction(environment)) return environment;
 
   requireStrongProductionSecret("JWT_ACCESS_SECRET", environment.JWT_ACCESS_SECRET);
   requireStrongProductionSecret("DATABASE_URL password", databasePassword(environment.DATABASE_URL));
+  backupEncryptionKey(environment.BACKUP_ENCRYPTION_KEY);
+  validateWebOrigin(environment.WEB_ORIGIN);
+  resolveAuthCookieSameSite(environment);
   return environment;
 }
 

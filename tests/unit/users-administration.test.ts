@@ -111,6 +111,10 @@ describe("users administration", () => {
     const storedHash = transaction.user.create.mock.calls[0][0].data.passwordHash;
     expect(storedHash).not.toBe(password);
     expect(result).toEqual(created);
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "create", entityId: targetId }),
+      transaction
+    );
     expect(serialized(result)).not.toContain("password");
     expect(serialized(audit.record.mock.calls)).not.toContain("password");
     expect(serialized(audit.record.mock.calls)).not.toContain(storedHash);
@@ -162,7 +166,8 @@ describe("users administration", () => {
       select: expect.any(Object)
     });
     expect(updateAudit.record).toHaveBeenCalledWith(
-      expect.objectContaining({ action: "update", before: expect.any(Object), after: expect.any(Object) })
+      expect.objectContaining({ action: "update", before: expect.any(Object), after: expect.any(Object) }),
+      updateTransaction
     );
 
     const inactive = safeUser({ active: false, roles: viewerRole });
@@ -182,7 +187,10 @@ describe("users administration", () => {
     expect(activateTransaction.user.update).toHaveBeenCalledWith(
       expect.objectContaining({ data: { active: true, sessionVersion: { increment: 1 } } })
     );
-    expect(activateAudit.record).toHaveBeenCalledWith(expect.objectContaining({ action: "activate" }));
+    expect(activateAudit.record).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "activate" }),
+      activateTransaction
+    );
 
     const deactivateTransaction = {
       user: {
@@ -201,7 +209,10 @@ describe("users administration", () => {
     expect(deactivateTransaction.user.update).toHaveBeenCalledWith(
       expect.objectContaining({ data: { active: false, sessionVersion: { increment: 1 } } })
     );
-    expect(deactivateAudit.record).toHaveBeenCalledWith(expect.objectContaining({ action: "deactivate" }));
+    expect(deactivateAudit.record).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "deactivate" }),
+      deactivateTransaction
+    );
     expect(serialized([
       updateAudit.record.mock.calls,
       activateAudit.record.mock.calls,
@@ -274,7 +285,8 @@ describe("users administration", () => {
         action: "update_roles",
         before: expect.objectContaining({ roles: ["ADMIN"] }),
         after: expect.objectContaining({ roles: ["MANAGER"] })
-      })
+      }),
+      transaction
     );
     expect(serialized(audit.record.mock.calls)).not.toContain("password");
   });
@@ -299,6 +311,10 @@ describe("users administration", () => {
     expect(storedHash).not.toBe(password);
     expect(updateData.sessionVersion).toEqual({ increment: 1 });
     expect(result).toMatchObject({ id: targetId, credentialReset: true });
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "reset_password", entityId: targetId }),
+      transaction
+    );
     expect(serialized(result)).not.toContain(password);
     expect(serialized(result)).not.toContain(storedHash);
     expect(serialized(result)).not.toContain("passwordHash");
@@ -335,7 +351,10 @@ describe("users administration", () => {
       data: { active: false, deletedAt: expect.any(Date), sessionVersion: { increment: 1 } },
       select: expect.any(Object)
     });
-    expect(deleteAudit.record).toHaveBeenCalledWith(expect.objectContaining({ action: "delete" }));
+    expect(deleteAudit.record).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "delete" }),
+      deleteTransaction
+    );
 
     const restoreTransaction = {
       user: {
@@ -352,7 +371,10 @@ describe("users administration", () => {
       data: { active: false, deletedAt: null, sessionVersion: { increment: 1 } },
       select: expect.any(Object)
     });
-    expect(restoreAudit.record).toHaveBeenCalledWith(expect.objectContaining({ action: "restore" }));
+    expect(restoreAudit.record).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "restore" }),
+      restoreTransaction
+    );
   });
 
   it("revokes every session explicitly without exposing or auditing credentials", async () => {
@@ -380,9 +402,47 @@ describe("users administration", () => {
         action: "revoke_sessions",
         entityId: targetId,
         after: expect.objectContaining({ sessionsRevoked: true })
-      })
+      }),
+      transaction
     );
     expect(serialized([result, audit.record.mock.calls])).not.toContain("password");
     expect(serialized([result, audit.record.mock.calls])).not.toContain("sessionVersion");
+  });
+
+  it("rolls back an administrative mutation when its audit insert fails", async () => {
+    const roles = [{ role: { id: "viewer", code: "VIEWER", name: "Leitor", description: null } }];
+    const before = safeUser({ name: "Nome anterior", roles });
+    const after = safeUser({ name: "Nome alterado", roles });
+    let persisted = before;
+    const transaction = {
+      user: {
+        findUnique: vi.fn(async () => persisted),
+        findFirst: vi.fn().mockResolvedValue(null),
+        update: vi.fn(async () => {
+          persisted = after;
+          return persisted;
+        })
+      }
+    };
+    const prisma = {
+      $transaction: vi.fn(async (operation: (client: typeof transaction) => Promise<unknown>) => {
+        const snapshot = persisted;
+        try {
+          return await operation(transaction);
+        } catch (error) {
+          persisted = snapshot;
+          throw error;
+        }
+      })
+    };
+    const auditError = new Error("audit unavailable");
+    const audit = { record: vi.fn().mockRejectedValue(auditError) };
+    const service = new UsersService(prisma as never, audit as never);
+
+    await expect(service.update(targetId, { name: "Nome alterado" }, actor)).rejects.toBe(auditError);
+
+    expect(transaction.user.update).toHaveBeenCalledOnce();
+    expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({ action: "update" }), transaction);
+    expect(persisted).toBe(before);
   });
 });

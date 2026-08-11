@@ -44,7 +44,7 @@ const report: OperationalReportData = {
   }],
   productivity: [{
     date: "2026-05-04", sector: "P1", equipment: "M1", shift: "T1", producedKg: 1000,
-    productiveHours: 8, kgPerHour: 125
+    productiveHours: 8, kgPerHour: 125, source: "INFORMED_MANUALLY"
   }]
 };
 

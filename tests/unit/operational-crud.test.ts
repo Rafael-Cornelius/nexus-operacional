@@ -190,7 +190,7 @@ describe("production operational CRUD", () => {
   it("does not restore a production entry into a closed week", async () => {
     const productionUpdate = vi.fn();
     const auditRecord = vi.fn();
-    const prisma = {
+    const transaction = {
       productionEntry: {
         findUnique: vi.fn().mockResolvedValue({
           id: ids.entry,
@@ -202,6 +202,10 @@ describe("production operational CRUD", () => {
         }),
         update: productionUpdate
       }
+    };
+    const prisma = {
+      ...transaction,
+      $transaction: vi.fn((operation: (client: typeof transaction) => unknown) => operation(transaction))
     };
     const service = new ProductionService(prisma as never, { record: auditRecord } as never);
 

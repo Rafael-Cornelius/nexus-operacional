@@ -87,96 +87,95 @@ export class ProductsService {
 
   async create(payload: unknown, user?: CurrentUser) {
     const input = productSchema.parse(payload);
-    const sector = await this.prisma.sector.findUniqueOrThrow({ where: { code: input.defaultSector } });
     const userId = this.safeUserId(user);
-    const product = await this.prisma.product.create({
-      data: {
-        code: input.code,
-        name: input.name,
-        defaultSectorId: sector.id,
-        unit: input.unit,
-        packageFilmWeightG: input.packageFilmWeightG,
-        notes: input.notes,
-        createdBy: userId,
-        updatedBy: userId,
-        weightConfig: {
-          create: {
-            packageWeightKg: input.packageWeightKg,
-            boxWeightKg: input.boxWeightKg,
-            packagesPerBox: input.packagesPerBox,
-            massWeightKg: input.massWeightKg,
-            targetPackageWeightG: input.targetPackageWeightG,
-            overweightTolerancePercent: input.overweightTolerancePercent,
-            formula: input.formula
+    return this.prisma.$transaction(async (transaction) => {
+      const sector = await transaction.sector.findUniqueOrThrow({ where: { code: input.defaultSector } });
+      const product = await transaction.product.create({
+        data: {
+          code: input.code,
+          name: input.name,
+          defaultSectorId: sector.id,
+          unit: input.unit,
+          packageFilmWeightG: input.packageFilmWeightG,
+          notes: input.notes,
+          createdBy: userId,
+          updatedBy: userId,
+          weightConfig: {
+            create: {
+              packageWeightKg: input.packageWeightKg,
+              boxWeightKg: input.boxWeightKg,
+              packagesPerBox: input.packagesPerBox,
+              massWeightKg: input.massWeightKg,
+              targetPackageWeightG: input.targetPackageWeightG,
+              overweightTolerancePercent: input.overweightTolerancePercent,
+              formula: input.formula
+            }
           }
-        }
-      },
-      include: { defaultSector: true, weightConfig: true }
+        },
+        include: { defaultSector: true, weightConfig: true }
+      });
+      await this.audit.record({ userId, module: "products", action: "create", entity: "Product", entityId: product.id, after: product }, transaction);
+      return product;
     });
-
-    await this.audit.record({ userId, module: "products", action: "create", entity: "Product", entityId: product.id, after: product });
-    return product;
   }
 
   async update(id: string, payload: unknown, user?: CurrentUser) {
     const input = productSchema.partial().parse(payload);
-    const current = await this.prisma.product.findUnique({ where: { id }, include: { weightConfig: true } });
-    if (!current) throw new NotFoundException("Produto nao encontrado.");
     const userId = this.safeUserId(user);
-
-    const sector = input.defaultSector
-      ? await this.prisma.sector.findUniqueOrThrow({ where: { code: input.defaultSector } })
-      : undefined;
-
-    const weightFields = ["packageWeightKg", "boxWeightKg", "packagesPerBox", "massWeightKg", "targetPackageWeightG", "overweightTolerancePercent", "formula"] as const;
-    const hasWeightPatch = weightFields.some((field) => Object.prototype.hasOwnProperty.call(input, field));
-    if (hasWeightPatch && !current.weightConfig) {
-      const missing = weightFields.filter((field) => input[field] === undefined);
-      if (missing.length) {
-        throw new BadRequestException(`Configuracao de peso inexistente. Informe todos os campos tecnicos: ${missing.join(", ")}.`);
+    return this.prisma.$transaction(async (transaction) => {
+      const current = await transaction.product.findUnique({ where: { id }, include: { weightConfig: true } });
+      if (!current) throw new NotFoundException("Produto nao encontrado.");
+      const sector = input.defaultSector
+        ? await transaction.sector.findUniqueOrThrow({ where: { code: input.defaultSector } })
+        : undefined;
+      const weightFields = ["packageWeightKg", "boxWeightKg", "packagesPerBox", "massWeightKg", "targetPackageWeightG", "overweightTolerancePercent", "formula"] as const;
+      const hasWeightPatch = weightFields.some((field) => Object.prototype.hasOwnProperty.call(input, field));
+      if (hasWeightPatch && !current.weightConfig) {
+        const missing = weightFields.filter((field) => input[field] === undefined);
+        if (missing.length) {
+          throw new BadRequestException(`Configuracao de peso inexistente. Informe todos os campos tecnicos: ${missing.join(", ")}.`);
+        }
       }
-    }
-
-    const product = await this.prisma.product.update({
-      where: { id },
-      data: {
-        code: input.code,
-        name: input.name,
-        defaultSectorId: sector?.id,
-        unit: input.unit,
-        packageFilmWeightG: input.packageFilmWeightG,
-        notes: input.notes,
-        updatedBy: userId,
-        weightConfig: hasWeightPatch
-          ? {
-              upsert: {
-                create: {
-                  packageWeightKg: input.packageWeightKg!,
-                  boxWeightKg: input.boxWeightKg!,
-                  packagesPerBox: input.packagesPerBox!,
-                  massWeightKg: input.massWeightKg!,
-                  targetPackageWeightG: input.targetPackageWeightG!,
-                  overweightTolerancePercent: input.overweightTolerancePercent!,
-                  formula: input.formula!
-                },
-                update: {
-                  packageWeightKg: input.packageWeightKg,
-                  boxWeightKg: input.boxWeightKg,
-                  packagesPerBox: input.packagesPerBox,
-                  massWeightKg: input.massWeightKg,
-                  targetPackageWeightG: input.targetPackageWeightG,
-                  overweightTolerancePercent: input.overweightTolerancePercent,
-                  formula: input.formula
+      const product = await transaction.product.update({
+        where: { id },
+        data: {
+          code: input.code,
+          name: input.name,
+          defaultSectorId: sector?.id,
+          unit: input.unit,
+          packageFilmWeightG: input.packageFilmWeightG,
+          notes: input.notes,
+          updatedBy: userId,
+          weightConfig: hasWeightPatch
+            ? {
+                upsert: {
+                  create: {
+                    packageWeightKg: input.packageWeightKg!,
+                    boxWeightKg: input.boxWeightKg!,
+                    packagesPerBox: input.packagesPerBox!,
+                    massWeightKg: input.massWeightKg!,
+                    targetPackageWeightG: input.targetPackageWeightG!,
+                    overweightTolerancePercent: input.overweightTolerancePercent!,
+                    formula: input.formula!
+                  },
+                  update: {
+                    packageWeightKg: input.packageWeightKg,
+                    boxWeightKg: input.boxWeightKg,
+                    packagesPerBox: input.packagesPerBox,
+                    massWeightKg: input.massWeightKg,
+                    targetPackageWeightG: input.targetPackageWeightG,
+                    overweightTolerancePercent: input.overweightTolerancePercent,
+                    formula: input.formula
+                  }
                 }
               }
-            }
-          : undefined
-      },
-      include: { defaultSector: true, weightConfig: true }
+            : undefined
+        },
+        include: { defaultSector: true, weightConfig: true }
+      });
+      await this.audit.record({ userId, module: "products", action: "update", entity: "Product", entityId: id, before: current, after: product }, transaction);
+      return product;
     });
-
-    await this.audit.record({ userId, module: "products", action: "update", entity: "Product", entityId: id, before: current, after: product });
-    return product;
   }
 
   async pricePeriods(productId: string) {
@@ -332,55 +331,63 @@ export class ProductsService {
   }
 
   async deactivate(id: string, user?: CurrentUser) {
-    const current = await this.prisma.product.findUnique({ where: { id }, include: { weightConfig: true } });
-    if (!current) throw new NotFoundException("Produto nao encontrado.");
     const userId = this.safeUserId(user);
-    const product = await this.prisma.product.update({
-      where: { id },
-      data: { active: false, updatedBy: userId },
-      include: { defaultSector: true, weightConfig: true }
+    return this.prisma.$transaction(async (transaction) => {
+      const current = await transaction.product.findUnique({ where: { id }, include: { weightConfig: true } });
+      if (!current) throw new NotFoundException("Produto nao encontrado.");
+      const product = await transaction.product.update({
+        where: { id },
+        data: { active: false, updatedBy: userId },
+        include: { defaultSector: true, weightConfig: true }
+      });
+      await this.audit.record({ userId, module: "products", action: "deactivate", entity: "Product", entityId: id, before: current, after: product }, transaction);
+      return product;
     });
-    await this.audit.record({ userId, module: "products", action: "deactivate", entity: "Product", entityId: id, before: current, after: product });
-    return product;
   }
 
   async activate(id: string, user?: CurrentUser) {
-    const current = await this.prisma.product.findUnique({ where: { id }, include: { weightConfig: true } });
-    if (!current || current.deletedAt) throw new NotFoundException("Produto nao encontrado.");
     const userId = this.safeUserId(user);
-    const product = await this.prisma.product.update({
-      where: { id },
-      data: { active: true, updatedBy: userId },
-      include: { defaultSector: true, weightConfig: true }
+    return this.prisma.$transaction(async (transaction) => {
+      const current = await transaction.product.findUnique({ where: { id }, include: { weightConfig: true } });
+      if (!current || current.deletedAt) throw new NotFoundException("Produto nao encontrado.");
+      const product = await transaction.product.update({
+        where: { id },
+        data: { active: true, updatedBy: userId },
+        include: { defaultSector: true, weightConfig: true }
+      });
+      await this.audit.record({ userId, module: "products", action: "activate", entity: "Product", entityId: id, before: current, after: product }, transaction);
+      return product;
     });
-    await this.audit.record({ userId, module: "products", action: "activate", entity: "Product", entityId: id, before: current, after: product });
-    return product;
   }
 
   async remove(id: string, user?: CurrentUser) {
-    const current = await this.prisma.product.findUnique({ where: { id }, include: { weightConfig: true } });
-    if (!current || current.deletedAt) throw new NotFoundException("Produto nao encontrado.");
     const userId = this.safeUserId(user);
-    const product = await this.prisma.product.update({
-      where: { id },
-      data: { active: false, deletedAt: new Date(), updatedBy: userId },
-      include: { defaultSector: true, weightConfig: true }
+    return this.prisma.$transaction(async (transaction) => {
+      const current = await transaction.product.findUnique({ where: { id }, include: { weightConfig: true } });
+      if (!current || current.deletedAt) throw new NotFoundException("Produto nao encontrado.");
+      const product = await transaction.product.update({
+        where: { id },
+        data: { active: false, deletedAt: new Date(), updatedBy: userId },
+        include: { defaultSector: true, weightConfig: true }
+      });
+      await this.audit.record({ userId, module: "products", action: "delete", entity: "Product", entityId: id, before: current, after: product }, transaction);
+      return product;
     });
-    await this.audit.record({ userId, module: "products", action: "delete", entity: "Product", entityId: id, before: current, after: product });
-    return product;
   }
 
   async restore(id: string, user?: CurrentUser) {
-    const current = await this.prisma.product.findUnique({ where: { id }, include: { weightConfig: true } });
-    if (!current || !current.deletedAt) throw new NotFoundException("Produto removido nao encontrado.");
     const userId = this.safeUserId(user);
-    const product = await this.prisma.product.update({
-      where: { id },
-      data: { deletedAt: null, active: false, updatedBy: userId },
-      include: { defaultSector: true, weightConfig: true }
+    return this.prisma.$transaction(async (transaction) => {
+      const current = await transaction.product.findUnique({ where: { id }, include: { weightConfig: true } });
+      if (!current || !current.deletedAt) throw new NotFoundException("Produto removido nao encontrado.");
+      const product = await transaction.product.update({
+        where: { id },
+        data: { deletedAt: null, active: false, updatedBy: userId },
+        include: { defaultSector: true, weightConfig: true }
+      });
+      await this.audit.record({ userId, module: "products", action: "restore", entity: "Product", entityId: id, before: current, after: product }, transaction);
+      return product;
     });
-    await this.audit.record({ userId, module: "products", action: "restore", entity: "Product", entityId: id, before: current, after: product });
-    return product;
   }
 
   private throwPriceWriteConflict(error: unknown): never {

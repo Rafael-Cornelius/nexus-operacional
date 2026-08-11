@@ -1,6 +1,6 @@
 export type WorkflowStatus = "DRAFT" | "SUBMITTED" | "UNDER_REVIEW" | "APPROVED" | "REJECTED" | "CANCELLED";
 export type WorkflowAction = "submit" | "approve" | "reject";
-export type WorkflowResource = "production" | "losses" | "downtime";
+export type WorkflowResource = "production" | "losses" | "downtime" | "dosage" | "productivity";
 
 export interface WorkflowEntry {
   id: string;

@@ -18,31 +18,54 @@ describe("equipment and shifts", () => {
   it("creates equipment only on an active production line", async () => {
     const lineId = "9d0b2bf5-f0a4-4e87-a919-12ce7bbd78d8";
     const created = { id: "equipment-1", productionLineId: lineId, code: "M1", name: "Máquina 1" };
-    const prisma = {
+    const transaction = {
       productionLine: { findUnique: vi.fn().mockResolvedValue({ id: lineId, active: true, deletedAt: null }) },
       equipment: {
         findUnique: vi.fn().mockResolvedValue(null),
         create: vi.fn().mockResolvedValue(created)
       }
     };
+    const prisma = { ...transaction, $transaction: vi.fn(async (operation: (client: typeof transaction) => Promise<unknown>) => operation(transaction)) };
     const audit = { record: vi.fn() };
     const service = new EquipmentService(prisma as never, audit as never);
 
     await expect(service.create({ productionLineId: lineId, code: "m1", name: "Máquina 1" })).resolves.toEqual(created);
     expect(prisma.equipment.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ code: "M1" }) }));
-    expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({ module: "equipment", action: "create" }));
+    expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({ module: "equipment", action: "create" }), transaction);
   });
 
   it("rejects equipment assigned to an inactive production line", async () => {
     const lineId = "b1f0c8b2-2fed-4623-a457-f6fcbe3ef349";
-    const prisma = {
+    const transaction = {
       productionLine: { findUnique: vi.fn().mockResolvedValue({ id: lineId, active: false, deletedAt: null }) },
       equipment: { findUnique: vi.fn(), create: vi.fn() }
     };
+    const prisma = { ...transaction, $transaction: vi.fn(async (operation: (client: typeof transaction) => Promise<unknown>) => operation(transaction)) };
     const service = new EquipmentService(prisma as never, { record: vi.fn() } as never);
 
     await expect(service.create({ productionLineId: lineId, code: "M1", name: "Máquina 1" })).rejects.toThrow("Linha de producao ativa");
     expect(prisma.equipment.create).not.toHaveBeenCalled();
+  });
+
+  it("rejects equipment creation when transactional audit fails", async () => {
+    const lineId = "9d0b2bf5-f0a4-4e87-a919-12ce7bbd78d8";
+    const created = { id: "equipment-1", productionLineId: lineId, code: "M1", name: "Máquina 1" };
+    const transaction = {
+      productionLine: { findUnique: vi.fn().mockResolvedValue({ id: lineId, active: true, deletedAt: null }) },
+      equipment: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockResolvedValue(created)
+      }
+    };
+    const prisma = { $transaction: vi.fn(async (operation: (client: typeof transaction) => Promise<unknown>) => operation(transaction)) };
+    const auditError = new Error("audit unavailable");
+    const audit = { record: vi.fn().mockRejectedValue(auditError) };
+    const service = new EquipmentService(prisma as never, audit as never);
+
+    await expect(service.create({ productionLineId: lineId, code: "M1", name: "Máquina 1" })).rejects.toBe(auditError);
+    expect(transaction.equipment.create).toHaveBeenCalledOnce();
+    expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({ action: "create", after: created }), transaction);
+    expect(prisma.$transaction).toHaveBeenCalledOnce();
   });
 
   it("normalizes shift codes and returns HH:mm times", async () => {
@@ -55,12 +78,13 @@ describe("equipment and shifts", () => {
       active: true,
       deletedAt: null
     };
-    const prisma = {
+    const transaction = {
       shift: {
         findUnique: vi.fn().mockResolvedValue(null),
         create: vi.fn().mockResolvedValue(shift)
       }
     };
+    const prisma = { ...transaction, $transaction: vi.fn(async (operation: (client: typeof transaction) => Promise<unknown>) => operation(transaction)) };
     const service = new ShiftsService(prisma as never, { record: vi.fn() } as never);
 
     await expect(service.create({ code: "t1", name: "Turno 1", startsAt: "06:00", endsAt: "14:00" })).resolves.toMatchObject({
@@ -68,6 +92,33 @@ describe("equipment and shifts", () => {
       startsAt: "06:00",
       endsAt: "14:00"
     });
+  });
+
+  it("rejects shift creation when transactional audit fails", async () => {
+    const shift = {
+      id: "shift-1",
+      code: "T1",
+      name: "Turno 1",
+      startsAt: new Date("1970-01-01T06:00:00.000Z"),
+      endsAt: new Date("1970-01-01T14:00:00.000Z"),
+      active: true,
+      deletedAt: null
+    };
+    const transaction = {
+      shift: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockResolvedValue(shift)
+      }
+    };
+    const prisma = { $transaction: vi.fn(async (operation: (client: typeof transaction) => Promise<unknown>) => operation(transaction)) };
+    const auditError = new Error("audit unavailable");
+    const audit = { record: vi.fn().mockRejectedValue(auditError) };
+    const service = new ShiftsService(prisma as never, audit as never);
+
+    await expect(service.create({ code: "T1", name: "Turno 1", startsAt: "06:00", endsAt: "14:00" })).rejects.toBe(auditError);
+    expect(transaction.shift.create).toHaveBeenCalledOnce();
+    expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({ action: "create" }), transaction);
+    expect(prisma.$transaction).toHaveBeenCalledOnce();
   });
 
   it("rejects invalid shift time strings before database access", async () => {

@@ -126,26 +126,63 @@ enum ProductPriceStatus {
   RETIRED
 }
 
+enum CalculationRuleApprovalStatus {
+  APPROVED
+  RETIRED
+}
+
+enum ProductivitySource {
+  INFORMED_MANUALLY
+  LEGACY_UNVERIFIED
+}
+
 model User {
-  id                String               @id @default(uuid()) @db.Uuid
-  email             String               @unique
-  name              String
-  passwordHash      String               @map("password_hash")
-  active            Boolean              @default(true)
-  sessionVersion    Int                  @default(1) @map("session_version")
-  lastLoginAt       DateTime?            @map("last_login_at")
-  createdAt         DateTime             @default(now()) @map("created_at")
-  updatedAt         DateTime             @updatedAt @map("updated_at")
-  deletedAt         DateTime?            @map("deleted_at")
-  roles             UserRole[]
-  auditLogs         AuditLog[]
-  responsibleGoals  Goal[]               @relation("GoalResponsible")
-  approvedGoals     Goal[]               @relation("GoalApprover")
-  createdGoals      Goal[]               @relation("GoalCreator")
-  retiredGoals      Goal[]               @relation("GoalRetirer")
-  responsiblePrices ProductPricePeriod[] @relation("ProductPriceResponsible")
-  approvedPrices    ProductPricePeriod[] @relation("ProductPriceApprover")
-  retiredPrices     ProductPricePeriod[] @relation("ProductPriceRetirer")
+  id                           String                    @id @default(uuid()) @db.Uuid
+  email                        String                    @unique
+  name                         String
+  passwordHash                 String                    @map("password_hash")
+  active                       Boolean                   @default(true)
+  sessionVersion               Int                       @default(1) @map("session_version")
+  lastLoginAt                  DateTime?                 @map("last_login_at")
+  createdAt                    DateTime                  @default(now()) @map("created_at")
+  updatedAt                    DateTime                  @updatedAt @map("updated_at")
+  deletedAt                    DateTime?                 @map("deleted_at")
+  roles                        UserRole[]
+  auditLogs                    AuditLog[]
+  responsibleGoals             Goal[]                    @relation("GoalResponsible")
+  approvedGoals                Goal[]                    @relation("GoalApprover")
+  createdGoals                 Goal[]                    @relation("GoalCreator")
+  retiredGoals                 Goal[]                    @relation("GoalRetirer")
+  responsiblePrices            ProductPricePeriod[]      @relation("ProductPriceResponsible")
+  approvedPrices               ProductPricePeriod[]      @relation("ProductPriceApprover")
+  retiredPrices                ProductPricePeriod[]      @relation("ProductPriceRetirer")
+  approvedCalculationRules     CalculationRuleApproval[] @relation("CalculationRuleApprover")
+  retiredCalculationRules      CalculationRuleApproval[] @relation("CalculationRuleRetirer")
+  submittedProductionEntries   ProductionEntry[]         @relation("ProductionEntrySubmitter")
+  approvedProductionEntries    ProductionEntry[]         @relation("ProductionEntryApprover")
+  rejectedProductionEntries    ProductionEntry[]         @relation("ProductionEntryRejector")
+  createdProductionEntries     ProductionEntry[]         @relation("ProductionEntryCreator")
+  updatedProductionEntries     ProductionEntry[]         @relation("ProductionEntryUpdater")
+  submittedLossEntries         LossEntry[]               @relation("LossEntrySubmitter")
+  approvedLossEntries          LossEntry[]               @relation("LossEntryApprover")
+  rejectedLossEntries          LossEntry[]               @relation("LossEntryRejector")
+  createdLossEntries           LossEntry[]               @relation("LossEntryCreator")
+  updatedLossEntries           LossEntry[]               @relation("LossEntryUpdater")
+  submittedDowntimeEntries     DowntimeEntry[]           @relation("DowntimeEntrySubmitter")
+  approvedDowntimeEntries      DowntimeEntry[]           @relation("DowntimeEntryApprover")
+  rejectedDowntimeEntries      DowntimeEntry[]           @relation("DowntimeEntryRejector")
+  createdDowntimeEntries       DowntimeEntry[]           @relation("DowntimeEntryCreator")
+  updatedDowntimeEntries       DowntimeEntry[]           @relation("DowntimeEntryUpdater")
+  submittedDosageChecks        DosageCheck[]             @relation("DosageCheckSubmitter")
+  approvedDosageChecks         DosageCheck[]             @relation("DosageCheckApprover")
+  rejectedDosageChecks         DosageCheck[]             @relation("DosageCheckRejector")
+  createdDosageChecks          DosageCheck[]             @relation("DosageCheckCreator")
+  updatedDosageChecks          DosageCheck[]             @relation("DosageCheckUpdater")
+  submittedProductivityEntries ProductivityEntry[]       @relation("ProductivityEntrySubmitter")
+  approvedProductivityEntries  ProductivityEntry[]       @relation("ProductivityEntryApprover")
+  rejectedProductivityEntries  ProductivityEntry[]       @relation("ProductivityEntryRejector")
+  createdProductivityEntries   ProductivityEntry[]       @relation("ProductivityEntryCreator")
+  updatedProductivityEntries   ProductivityEntry[]       @relation("ProductivityEntryUpdater")
 
   @@map("users")
 }
@@ -466,6 +503,11 @@ model ProductionEntry {
   product                 Product             @relation(fields: [productId], references: [id])
   pricePeriod             ProductPricePeriod? @relation("ProductionEntryPricePeriod", fields: [pricePeriodId], references: [id], onDelete: Restrict)
   order                   ProductionOrder?    @relation(fields: [productionOrderId], references: [id])
+  submitter               User?               @relation("ProductionEntrySubmitter", fields: [submittedBy], references: [id], onDelete: Restrict)
+  approver                User?               @relation("ProductionEntryApprover", fields: [approvedBy], references: [id], onDelete: Restrict)
+  rejector                User?               @relation("ProductionEntryRejector", fields: [rejectedBy], references: [id], onDelete: Restrict)
+  creator                 User?               @relation("ProductionEntryCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  updater                 User?               @relation("ProductionEntryUpdater", fields: [updatedBy], references: [id], onDelete: Restrict)
 
   @@index([weekId, sectorId, date])
   @@index([productId])
@@ -547,6 +589,11 @@ model LossEntry {
   shift                   Shift?              @relation(fields: [shiftId], references: [id])
   importBatch             ImportBatch?        @relation(fields: [importBatchId], references: [id])
   lossType                LossType            @relation(fields: [lossTypeId], references: [id])
+  submitter               User?               @relation("LossEntrySubmitter", fields: [submittedBy], references: [id], onDelete: Restrict)
+  approver                User?               @relation("LossEntryApprover", fields: [approvedBy], references: [id], onDelete: Restrict)
+  rejector                User?               @relation("LossEntryRejector", fields: [rejectedBy], references: [id], onDelete: Restrict)
+  creator                 User?               @relation("LossEntryCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  updater                 User?               @relation("LossEntryUpdater", fields: [updatedBy], references: [id], onDelete: Restrict)
 
   @@index([weekId, date])
   @@index([lossTypeId])
@@ -614,6 +661,11 @@ model DowntimeEntry {
   shift                   Shift?          @relation(fields: [shiftId], references: [id])
   importBatch             ImportBatch?    @relation(fields: [importBatchId], references: [id])
   reason                  DowntimeReason  @relation(fields: [downtimeReasonId], references: [id])
+  submitter               User?           @relation("DowntimeEntrySubmitter", fields: [submittedBy], references: [id], onDelete: Restrict)
+  approver                User?           @relation("DowntimeEntryApprover", fields: [approvedBy], references: [id], onDelete: Restrict)
+  rejector                User?           @relation("DowntimeEntryRejector", fields: [rejectedBy], references: [id], onDelete: Restrict)
+  creator                 User?           @relation("DowntimeEntryCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  updater                 User?           @relation("DowntimeEntryUpdater", fields: [updatedBy], references: [id], onDelete: Restrict)
 
   @@index([weekId, date])
   @@index([downtimeReasonId])
@@ -624,24 +676,46 @@ model DowntimeEntry {
 }
 
 model ProductivityEntry {
-  id                      String       @id @default(uuid()) @db.Uuid
-  weekId                  String       @map("week_id") @db.Uuid
-  sectorCode              SectorCode   @map("sector_code")
-  equipmentId             String?      @map("equipment_id") @db.Uuid
-  shiftId                 String?      @map("shift_id") @db.Uuid
-  date                    DateTime     @db.Date
-  producedKg              Decimal      @map("produced_kg") @db.Decimal(14, 3)
-  productiveHours         Decimal      @map("productive_hours") @db.Decimal(12, 3)
-  kgPerHour               Decimal      @map("kg_per_hour") @db.Decimal(14, 3)
-  calculationRuleVersions Json         @default("{}") @map("calculation_rule_versions")
-  createdAt               DateTime     @default(now()) @map("created_at")
-  updatedAt               DateTime     @updatedAt @map("updated_at")
-  week                    WeeklyPeriod @relation(fields: [weekId], references: [id])
-  equipment               Equipment?   @relation(fields: [equipmentId], references: [id])
-  shift                   Shift?       @relation(fields: [shiftId], references: [id])
+  id                      String             @id @default(uuid()) @db.Uuid
+  weekId                  String             @map("week_id") @db.Uuid
+  sectorCode              SectorCode         @map("sector_code")
+  equipmentId             String?            @map("equipment_id") @db.Uuid
+  shiftId                 String?            @map("shift_id") @db.Uuid
+  date                    DateTime           @db.Date
+  producedKg              Decimal            @map("produced_kg") @db.Decimal(14, 3)
+  productiveHours         Decimal            @map("productive_hours") @db.Decimal(12, 3)
+  kgPerHour               Decimal            @map("kg_per_hour") @db.Decimal(14, 3)
+  dataSource              ProductivitySource @default(INFORMED_MANUALLY) @map("data_source")
+  calculationRuleVersions Json               @default("{}") @map("calculation_rule_versions")
+  workflowStatus          WorkflowStatus     @default(DRAFT) @map("workflow_status")
+  version                 Int                @default(1)
+  submittedAt             DateTime?          @map("submitted_at")
+  submittedBy             String?            @map("submitted_by") @db.Uuid
+  submissionReason        String?            @map("submission_reason")
+  approvedAt              DateTime?          @map("approved_at")
+  approvedBy              String?            @map("approved_by") @db.Uuid
+  approvalReason          String?            @map("approval_reason")
+  rejectedAt              DateTime?          @map("rejected_at")
+  rejectedBy              String?            @map("rejected_by") @db.Uuid
+  rejectionReason         String?            @map("rejection_reason")
+  notes                   String?
+  createdAt               DateTime           @default(now()) @map("created_at")
+  updatedAt               DateTime           @updatedAt @map("updated_at")
+  deletedAt               DateTime?          @map("deleted_at")
+  createdBy               String?            @map("created_by") @db.Uuid
+  updatedBy               String?            @map("updated_by") @db.Uuid
+  week                    WeeklyPeriod       @relation(fields: [weekId], references: [id])
+  equipment               Equipment?         @relation(fields: [equipmentId], references: [id])
+  shift                   Shift?             @relation(fields: [shiftId], references: [id])
+  submitter               User?              @relation("ProductivityEntrySubmitter", fields: [submittedBy], references: [id], onDelete: Restrict)
+  approver                User?              @relation("ProductivityEntryApprover", fields: [approvedBy], references: [id], onDelete: Restrict)
+  rejector                User?              @relation("ProductivityEntryRejector", fields: [rejectedBy], references: [id], onDelete: Restrict)
+  creator                 User?              @relation("ProductivityEntryCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  updater                 User?              @relation("ProductivityEntryUpdater", fields: [updatedBy], references: [id], onDelete: Restrict)
 
   @@index([weekId, sectorCode])
   @@index([equipmentId, shiftId])
+  @@index([weekId, workflowStatus])
   @@map("productivity_entries")
 }
 
@@ -701,31 +775,51 @@ model Goal {
 }
 
 model DosageCheck {
-  id                      String       @id @default(uuid()) @db.Uuid
-  weekId                  String       @map("week_id") @db.Uuid
-  productId               String       @map("product_id") @db.Uuid
-  sectorCode              SectorCode   @map("sector_code")
-  equipmentId             String?      @map("equipment_id") @db.Uuid
-  shiftId                 String?      @map("shift_id") @db.Uuid
-  operatorId              String?      @map("operator_id") @db.Uuid
-  date                    DateTime     @db.Date
-  targetWeightG           Decimal      @map("target_weight_g") @db.Decimal(12, 3)
-  sampleWeightsG          Json         @map("sample_weights_g")
-  sampleCount             Int          @map("sample_count")
-  averageWeightG          Decimal      @map("average_weight_g") @db.Decimal(12, 3)
-  standardDeviationG      Decimal      @map("standard_deviation_g") @db.Decimal(12, 3)
-  overweightG             Decimal      @map("overweight_g") @db.Decimal(12, 3)
-  calculationRuleVersions Json         @default("{}") @map("calculation_rule_versions")
+  id                      String         @id @default(uuid()) @db.Uuid
+  weekId                  String         @map("week_id") @db.Uuid
+  productId               String         @map("product_id") @db.Uuid
+  sectorCode              SectorCode     @map("sector_code")
+  equipmentId             String?        @map("equipment_id") @db.Uuid
+  shiftId                 String?        @map("shift_id") @db.Uuid
+  operatorId              String?        @map("operator_id") @db.Uuid
+  date                    DateTime       @db.Date
+  targetWeightG           Decimal        @map("target_weight_g") @db.Decimal(12, 3)
+  sampleWeightsG          Json           @map("sample_weights_g")
+  sampleCount             Int            @map("sample_count")
+  averageWeightG          Decimal        @map("average_weight_g") @db.Decimal(12, 3)
+  standardDeviationG      Decimal        @map("standard_deviation_g") @db.Decimal(12, 3)
+  overweightG             Decimal        @map("overweight_g") @db.Decimal(12, 3)
+  calculationRuleVersions Json           @default("{}") @map("calculation_rule_versions")
+  workflowStatus          WorkflowStatus @default(DRAFT) @map("workflow_status")
+  version                 Int            @default(1)
+  submittedAt             DateTime?      @map("submitted_at")
+  submittedBy             String?        @map("submitted_by") @db.Uuid
+  submissionReason        String?        @map("submission_reason")
+  approvedAt              DateTime?      @map("approved_at")
+  approvedBy              String?        @map("approved_by") @db.Uuid
+  approvalReason          String?        @map("approval_reason")
+  rejectedAt              DateTime?      @map("rejected_at")
+  rejectedBy              String?        @map("rejected_by") @db.Uuid
+  rejectionReason         String?        @map("rejection_reason")
   notes                   String?
-  createdAt               DateTime     @default(now()) @map("created_at")
-  updatedAt               DateTime     @updatedAt @map("updated_at")
-  week                    WeeklyPeriod @relation(fields: [weekId], references: [id])
-  product                 Product      @relation(fields: [productId], references: [id])
-  equipment               Equipment?   @relation(fields: [equipmentId], references: [id])
-  shift                   Shift?       @relation(fields: [shiftId], references: [id])
+  createdAt               DateTime       @default(now()) @map("created_at")
+  updatedAt               DateTime       @updatedAt @map("updated_at")
+  deletedAt               DateTime?      @map("deleted_at")
+  createdBy               String?        @map("created_by") @db.Uuid
+  updatedBy               String?        @map("updated_by") @db.Uuid
+  week                    WeeklyPeriod   @relation(fields: [weekId], references: [id])
+  product                 Product        @relation(fields: [productId], references: [id])
+  equipment               Equipment?     @relation(fields: [equipmentId], references: [id])
+  shift                   Shift?         @relation(fields: [shiftId], references: [id])
+  submitter               User?          @relation("DosageCheckSubmitter", fields: [submittedBy], references: [id], onDelete: Restrict)
+  approver                User?          @relation("DosageCheckApprover", fields: [approvedBy], references: [id], onDelete: Restrict)
+  rejector                User?          @relation("DosageCheckRejector", fields: [rejectedBy], references: [id], onDelete: Restrict)
+  creator                 User?          @relation("DosageCheckCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  updater                 User?          @relation("DosageCheckUpdater", fields: [updatedBy], references: [id], onDelete: Restrict)
 
   @@index([weekId, productId, date])
   @@index([equipmentId, shiftId])
+  @@index([weekId, workflowStatus])
   @@map("dosage_checks")
 }
 
@@ -788,6 +882,29 @@ model AuditLog {
   @@index([entity, entityId])
   @@index([correlationId])
   @@map("audit_logs")
+}
+
+model CalculationRuleApproval {
+  id               String                        @id @default(uuid()) @db.Uuid
+  ruleId           String                        @map("rule_id") @db.VarChar(160)
+  ruleVersion      Int                           @map("rule_version")
+  status           CalculationRuleApprovalStatus @default(APPROVED)
+  approvedAt       DateTime                      @map("approved_at")
+  approvedBy       String                        @map("approved_by") @db.Uuid
+  approvalReason   String                        @map("approval_reason")
+  retiredAt        DateTime?                     @map("retired_at")
+  retiredBy        String?                       @map("retired_by") @db.Uuid
+  retirementReason String?                       @map("retirement_reason")
+  createdAt        DateTime                      @default(now()) @map("created_at")
+  updatedAt        DateTime                      @updatedAt @map("updated_at")
+  approver         User                          @relation("CalculationRuleApprover", fields: [approvedBy], references: [id], onDelete: Restrict)
+  retirer          User?                         @relation("CalculationRuleRetirer", fields: [retiredBy], references: [id], onDelete: Restrict)
+
+  @@unique([ruleId, ruleVersion])
+  @@index([status, ruleId])
+  @@index([approvedBy])
+  @@index([retiredBy])
+  @@map("calculation_rule_approvals")
 }
 
 model Attachment {

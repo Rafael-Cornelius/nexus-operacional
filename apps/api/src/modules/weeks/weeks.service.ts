@@ -110,15 +110,17 @@ export class WeeksService {
         if (current.status !== "REVIEW") {
           throw new BadRequestException("Semana deve estar em revisao antes do fechamento.");
         }
-        const [pendingProduction, pendingLosses, pendingDowntimes] = await Promise.all([
+        const [pendingProduction, pendingLosses, pendingDowntimes, pendingDosage, pendingProductivity] = await Promise.all([
           tx.productionEntry.count({ where: { weekId: id, deletedAt: null, workflowStatus: { not: "APPROVED" } } }),
           tx.lossEntry.count({ where: { weekId: id, deletedAt: null, workflowStatus: { not: "APPROVED" } } }),
-          tx.downtimeEntry.count({ where: { weekId: id, deletedAt: null, workflowStatus: { not: "APPROVED" } } })
+          tx.downtimeEntry.count({ where: { weekId: id, deletedAt: null, workflowStatus: { not: "APPROVED" } } }),
+          tx.dosageCheck.count({ where: { weekId: id, deletedAt: null, workflowStatus: { not: "APPROVED" } } }),
+          tx.productivityEntry.count({ where: { weekId: id, deletedAt: null, workflowStatus: { not: "APPROVED" } } })
         ]);
-        const pending = pendingProduction + pendingLosses + pendingDowntimes;
+        const pending = pendingProduction + pendingLosses + pendingDowntimes + pendingDosage + pendingProductivity;
         if (pending > 0) {
           throw new BadRequestException(
-            `Semana possui ${pending} lancamento(s) sem aprovacao: producao ${pendingProduction}, perdas ${pendingLosses}, paradas ${pendingDowntimes}.`
+            `Semana possui ${pending} lancamento(s) sem aprovacao: producao ${pendingProduction}, perdas ${pendingLosses}, paradas ${pendingDowntimes}, dosagem ${pendingDosage}, produtividade ${pendingProductivity}.`
           );
         }
         const snapshot = await this.captureSnapshot(tx, current, "closed", userId);
@@ -235,11 +237,14 @@ export class WeeksService {
         orderBy: [{ date: "asc" }, { createdAt: "asc" }]
       }),
       tx.dosageCheck.findMany({
-        where: { weekId },
+        where: { weekId, deletedAt: null, workflowStatus: "APPROVED" },
         include: { product: { select: { code: true, name: true } } },
         orderBy: [{ date: "asc" }, { createdAt: "asc" }]
       }),
-      tx.productivityEntry.findMany({ where: { weekId }, orderBy: [{ date: "asc" }, { createdAt: "asc" }] }),
+      tx.productivityEntry.findMany({
+        where: { weekId, deletedAt: null, workflowStatus: "APPROVED" },
+        orderBy: [{ date: "asc" }, { createdAt: "asc" }]
+      }),
       tx.goal.findMany({
         where: {
           status: "APPROVED",
