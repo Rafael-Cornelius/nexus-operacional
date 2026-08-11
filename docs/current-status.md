@@ -61,7 +61,7 @@ O Nexus Operacional possui uma base valida para homologacao controlada e uso par
 - O bootstrap intencionalmente cria apenas um ADMIN. Antes da operação, esse administrador precisa cadastrar e testar um segundo gestor/supervisor ativo; a segregação bloqueia autoaprovação de lançamentos, preços e metas.
 - Nenhum host operacional, domínio, certificado TLS, PostgreSQL gerenciado ou destino externo de backup foi fornecido nesta sessão. GitHub Pages continua sendo somente demonstração estática.
 - A fórmula P1, limites de classificação de parada e ranking de sobrepeso permanecem bloqueados para decisão humana quando marcados como `REVIEW_REQUIRED`.
-- `npm audit` não aponta vulnerabilidade alta/crítica; restam dois achados moderados na cadeia transitiva ExcelJS/UUID, sem correção compatível publicada no lock atual.
+- `npm audit` não aponta vulnerabilidade alta/crítica; restam oito ocorrências moderadas nas cadeias transitivas PostCSS e ExcelJS/UUID, sem correção compatível não disruptiva publicada no lock atual.
 
 ## Regra de uso
 
