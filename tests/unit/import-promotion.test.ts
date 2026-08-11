@@ -197,7 +197,7 @@ function fixture(record: ReturnType<typeof productRecord> | Array<ReturnType<typ
     lossEntry: { create: vi.fn().mockImplementation(() => Promise.resolve({ id: `loss-${++lossSequence}` })) },
     downtimeEntry: { findFirst: vi.fn().mockResolvedValue(null), create: vi.fn().mockResolvedValue({ id: "downtime-1" }) },
     productPricePeriod: { findFirst: vi.fn().mockResolvedValue(null) },
-    $queryRaw: vi.fn(),
+    $executeRaw: vi.fn().mockResolvedValue(0),
     importError: { count: vi.fn().mockResolvedValue(0) },
     auditLog: { create: vi.fn() }
   };

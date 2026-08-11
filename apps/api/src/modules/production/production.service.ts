@@ -792,7 +792,7 @@ export class ProductionService {
       key.productId,
       key.productionOrder,
     ].join(":");
-    await transaction.$queryRaw(
+    await transaction.$executeRaw(
       Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`,
     );
   }

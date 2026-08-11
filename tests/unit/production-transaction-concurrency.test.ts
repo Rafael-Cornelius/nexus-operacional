@@ -136,7 +136,7 @@ describe("production write transactions and concurrency", () => {
     };
     const transaction = {
       ...referenceData(),
-      $queryRaw: vi.fn().mockResolvedValue([]),
+      $executeRaw: vi.fn().mockResolvedValue(0),
       productionOrder: {
         findUnique: vi.fn(({ where }) => Promise.resolve(
           state.orders.find((row) => row.orderNumber === orderKey({ where })) ?? null
@@ -184,7 +184,7 @@ describe("production write transactions and concurrency", () => {
     };
     const transaction = {
       ...referenceData(),
-      $queryRaw: vi.fn().mockResolvedValue([]),
+      $executeRaw: vi.fn().mockResolvedValue(0),
       productionEntry: {
         findUnique: vi.fn().mockResolvedValue(current),
         findFirst: vi.fn().mockResolvedValue(null),
@@ -233,7 +233,7 @@ describe("production write transactions and concurrency", () => {
     const create = vi.fn(({ data }) => Promise.resolve({ id: ids.entry, ...data }));
     const transaction = {
       ...referenceData(),
-      $queryRaw: vi.fn().mockResolvedValue([]),
+      $executeRaw: vi.fn().mockResolvedValue(0),
       productionEntry: { findFirst, create },
       productionOrder: {
         findUnique: vi.fn().mockResolvedValue({ id: ids.order, sectorCode: "P1", deletedAt: null }),
@@ -305,7 +305,7 @@ describe("production write transactions and concurrency", () => {
               return Promise.resolve(order);
             })
           },
-          $queryRaw: vi.fn(async (query) => {
+          $executeRaw: vi.fn(async (query) => {
             const key = String(query.values[0]);
             const previous = lockTails.get(key) ?? Promise.resolve();
             let release = () => undefined;
@@ -315,7 +315,7 @@ describe("production write transactions and concurrency", () => {
             lockTails.set(key, previous.then(() => held));
             await previous;
             releases.push(release);
-            return [];
+            return 0;
           })
         };
         try {
@@ -371,7 +371,7 @@ describe("production write transactions and concurrency", () => {
               return Promise.resolve(order);
             })
           },
-          $queryRaw: vi.fn(async (query) => {
+          $executeRaw: vi.fn(async (query) => {
             const key = String(query.values[0]);
             const previous = lockTails.get(key) ?? Promise.resolve();
             let release = () => undefined;
@@ -381,7 +381,7 @@ describe("production write transactions and concurrency", () => {
             lockTails.set(key, previous.then(() => held));
             await previous;
             releases.push(release);
-            return [];
+            return 0;
           })
         };
         try {

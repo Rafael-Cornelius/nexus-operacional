@@ -112,7 +112,7 @@ describe("production operational CRUD", () => {
     const productionUpdate = vi.fn().mockResolvedValue(updated);
     const auditRecord = vi.fn().mockResolvedValue(undefined);
     const transaction = {
-      $queryRaw: vi.fn().mockResolvedValue([]),
+      $executeRaw: vi.fn().mockResolvedValue(0),
       productionEntry: {
         findUnique: vi.fn().mockResolvedValue(current),
         findFirst: vi.fn().mockResolvedValue(null),

@@ -123,6 +123,7 @@ describe("dosage and productivity governance", () => {
     const update = vi.fn();
     const transaction = {
       $queryRaw: vi.fn().mockResolvedValue([]),
+      $executeRaw: vi.fn().mockResolvedValue(0),
       dosageCheck: {
         findUnique: vi.fn().mockResolvedValue({
           id: entryId,

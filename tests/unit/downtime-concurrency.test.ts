@@ -209,6 +209,7 @@ describe("downtime overlap concurrency", () => {
     const changed = { ...current, version: 2 };
     const transaction = {
       $queryRaw: vi.fn().mockResolvedValue([]),
+      $executeRaw: vi.fn().mockResolvedValue(0),
       downtimeEntry: {
         findUnique: vi.fn().mockResolvedValue(current),
         findFirst: vi.fn().mockResolvedValue(null),
@@ -229,7 +230,8 @@ describe("downtime overlap concurrency", () => {
     const actor = { id: ids.actor, email: "supervisor@nexus.local", roles: ["SUPERVISOR"] };
 
     await expect(service[method](ids.entry, command, actor)).resolves.toEqual(changed);
-    expect(transaction.$queryRaw).toHaveBeenCalledTimes(method === "approve" ? 2 : 1);
+    expect(transaction.$queryRaw).toHaveBeenCalledOnce();
+    expect(transaction.$executeRaw).toHaveBeenCalledTimes(method === "approve" ? 1 : 0);
     expect(transaction.downtimeEntry.update).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: ids.entry, version: 1 } })
     );

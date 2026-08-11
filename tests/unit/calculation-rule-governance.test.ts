@@ -42,6 +42,23 @@ function approval(overrides: Record<string, unknown> = {}) {
 }
 
 describe("calculation rule governance", () => {
+  it("executes every void advisory lock without asking Prisma to deserialize it", () => {
+    const paths = [
+      "apps/api/src/modules/calculation-rules/calculation-rules.service.ts",
+      "apps/api/src/modules/import/import-promotion.service.ts",
+      "apps/api/src/modules/production/production.service.ts"
+    ];
+
+    for (const relativePath of paths) {
+      const source = readFileSync(join(repoRoot, relativePath), "utf8");
+      expect(source, relativePath).toContain('pg_advisory_xact_lock');
+      expect(source, relativePath).toContain(".$executeRaw(");
+      expect(source, relativePath).not.toMatch(
+        /\.\$queryRaw\([\s\S]{0,160}pg_advisory_xact_lock/
+      );
+    }
+  });
+
   it("creates immutable versioned decisions without inserting approval data", () => {
     const schema = readFileSync(join(repoRoot, "prisma/schema.prisma"), "utf8");
     const migration = readFileSync(
@@ -85,7 +102,7 @@ describe("calculation rule governance", () => {
   it("approves current REVIEW_REQUIRED version and audits in same transaction", async () => {
     const approved = approval();
     const transaction = {
-      $queryRaw: vi.fn().mockResolvedValue([]),
+      $executeRaw: vi.fn().mockResolvedValue(0),
       calculationRuleApproval: {
         findUnique: vi.fn().mockResolvedValue(null),
         create: vi.fn().mockResolvedValue(approved)
@@ -116,13 +133,13 @@ describe("calculation rule governance", () => {
       expect.objectContaining({ action: "approve", reason: "Fórmula validada em reunião industrial." }),
       transaction
     );
-    expect(transaction.$queryRaw).toHaveBeenCalledOnce();
+    expect(transaction.$executeRaw).toHaveBeenCalledOnce();
   });
 
   it("never reactivates retired version and requires decision reason", async () => {
     const retired = approval({ status: "RETIRED", retiredAt: new Date(), retiredBy: actor.id });
     const transaction = {
-      $queryRaw: vi.fn().mockResolvedValue([]),
+      $executeRaw: vi.fn().mockResolvedValue(0),
       calculationRuleApproval: { findUnique: vi.fn().mockResolvedValue(retired), create: vi.fn() }
     };
     const prisma = {
@@ -151,7 +168,7 @@ describe("calculation rule governance", () => {
       retirementReason: "Evidência operacional posterior invalidou regra."
     });
     const transaction = {
-      $queryRaw: vi.fn().mockResolvedValue([]),
+      $executeRaw: vi.fn().mockResolvedValue(0),
       calculationRuleApproval: {
         findUnique: vi.fn().mockResolvedValue(current),
         update: vi.fn().mockResolvedValue(retired)
@@ -178,7 +195,7 @@ describe("calculation rule governance", () => {
 
   it("blocks missing approval and accepts only exact approved ruleId plus version", async () => {
     const transaction = {
-      $queryRaw: vi.fn().mockResolvedValue([]),
+      $executeRaw: vi.fn().mockResolvedValue(0),
       calculationRuleApproval: { findMany: vi.fn().mockResolvedValue([]) }
     };
     const snapshot = { [ruleId]: 1 };
@@ -215,7 +232,7 @@ describe("calculation rule governance", () => {
     };
     const update = vi.fn();
     const transaction = {
-      $queryRaw: vi.fn().mockResolvedValue([]),
+      $executeRaw: vi.fn().mockResolvedValue(0),
       productionEntry: { findUnique: vi.fn().mockResolvedValue(current), update },
       calculationRuleApproval: { findMany: vi.fn().mockResolvedValue([]) }
     };
@@ -237,6 +254,7 @@ describe("calculation rule governance", () => {
     const update = vi.fn();
     const transaction = {
       $queryRaw: vi.fn().mockResolvedValue([]),
+      $executeRaw: vi.fn().mockResolvedValue(0),
       downtimeEntry: {
         findUnique: vi.fn().mockResolvedValue({
           id: entryId,
@@ -279,7 +297,7 @@ describe("calculation rule governance", () => {
   it("does not classify an overweight ranking with an unapproved ambiguous rule", async () => {
     const productLookup = vi.fn();
     const transaction = {
-      $queryRaw: vi.fn().mockResolvedValue([]),
+      $executeRaw: vi.fn().mockResolvedValue(0),
       productionEntry: {
         groupBy: vi.fn().mockResolvedValue([
           { productId: "88888888-8888-4888-8888-888888888888", _sum: { overweightTotalKg: 2, producedKg: 100 } }

@@ -532,7 +532,7 @@ export class ImportPromotionService {
           "Perda de " + row.productCode + " exige custo de filme positivo em preco APPROVED vigente, com origem e moeda."
         );
       }
-      await tx.$queryRaw(Prisma.sql`
+      await tx.$executeRaw(Prisma.sql`
         SELECT pg_advisory_xact_lock(hashtextextended(${"import-loss:" + record.sourceFingerprint}, 0))
       `);
       const collision = await tx.importStagingRecord.findFirst({

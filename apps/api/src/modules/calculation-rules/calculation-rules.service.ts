@@ -28,7 +28,7 @@ const approvalInclude = {
 
 type RuleDecisionClient = Pick<
   Prisma.TransactionClient,
-  "calculationRuleApproval" | "$queryRaw"
+  "calculationRuleApproval" | "$executeRaw"
 >;
 
 interface RuleVersion {
@@ -75,12 +75,12 @@ function requiredReviewRules(snapshot: Prisma.JsonValue): RuleVersion[] {
 }
 
 async function lockRuleVersion(
-  transaction: Pick<Prisma.TransactionClient, "$queryRaw">,
+  transaction: Pick<Prisma.TransactionClient, "$executeRaw">,
   ruleId: string,
   ruleVersion: number
 ) {
   const lockKey = `nexus:calculation-rule:${ruleId}:${ruleVersion}`;
-  await transaction.$queryRaw(
+  await transaction.$executeRaw(
     Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`
   );
 }
